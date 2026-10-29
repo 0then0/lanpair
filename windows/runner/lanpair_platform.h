@@ -1,7 +1,6 @@
 #ifndef LANPAIR_PLATFORM_H_
 #define LANPAIR_PLATFORM_H_
 #include <flutter/binary_messenger.h>
-#include <winsock2.h>
 #include <windows.h>
 #include <memory>
 class LanPairPlatform {

@@ -138,7 +138,7 @@ struct LanPairPlatform::State : std::enable_shared_from_this<State> {
     }
     auto op = MakeOperation(source); op->name = name;
     op->resolve.Version = DNS_QUERY_REQUEST_VERSION1; op->resolve.InterfaceIndex = op->interface_index;
-    op->resolve.QueryName = op->name.c_str();
+    op->resolve.QueryName = op->name.data();
     auto* context = new Context(op); op->resolve.pQueryContext = context;
     op->resolve.pResolveCompletionCallback = [](DWORD status, PVOID context_, PDNS_SERVICE_INSTANCE instance) {
       std::unique_ptr<Context> hold(static_cast<Context*>(context_)); auto op_ = *hold;

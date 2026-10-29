@@ -1,0 +1,2 @@
+"NSLocalNetworkUsageDescription" = "LANPairは選択したデバイスのみに接続し、ローカルネットワークでの到達性と検出を比較します。";
+"NSCameraUsageDescription" = "LANPairの招待QRコードをスキャンします。カメラを使わずに招待を貼り付けたり、ファイルから読み込んだりすることもできます。";

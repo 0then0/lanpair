@@ -1,0 +1,17 @@
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="128"
+  height="128"
+  viewBox="0 0 128 128"
+  role="img"
+  aria-labelledby="title"
+>
+  <title id="title">LANPair: two devices and bidirectional checks</title>
+  <rect width="128" height="128" rx="28" fill="#153E49" />
+  <g fill="none" stroke="#FFFFFF" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="12" y="36" width="54" height="36" rx="4" />
+    <path d="M39 72v14M27 86h24" />
+    <rect x="92" y="34" width="24" height="56" rx="5" />
+    <path d="M101 81h6M74 50h10l-5-5M84 50l-5 5M84 70H74l5-5M74 70l5 5" />
+  </g>
+</svg>

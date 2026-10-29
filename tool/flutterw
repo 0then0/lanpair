@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+export XDG_CONFIG_HOME="$project_dir/.tool/config"
+export PUB_CACHE="$project_dir/.tool/pub-cache"
+export FLUTTER_SUPPRESS_ANALYTICS=true
+export CI=true
+if [ -x "$project_dir/.tool/flutter/bin/flutter" ]; then
+  exec "$project_dir/.tool/flutter/bin/flutter" --suppress-analytics "$@"
+fi
+exec flutter --suppress-analytics "$@"

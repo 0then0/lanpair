@@ -1,0 +1,27 @@
+name: Bug report
+description: Report reproducible behavior using redacted evidence.
+body:
+  - type: markdown
+    attributes:
+      value: Do not post invitations, secrets, private addresses or unredacted journals. Use SECURITY.md for vulnerabilities.
+  - type: input
+    id: environment
+    attributes:
+      label: App version, platform and OS version
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps and observed behavior
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected observation
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Redacted evidence and validation level
+      description: Distinguish native build, emulator and physical devices. Missing ACK does not itself prove missing delivery.

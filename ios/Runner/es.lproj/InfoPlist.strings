@@ -1,0 +1,2 @@
+"NSLocalNetworkUsageDescription" = "LANPair se conecta solo al dispositivo que elijas para comparar la accesibilidad y el descubrimiento en la red local.";
+"NSCameraUsageDescription" = "Escanea el código QR de una invitación de LANPair. También puedes pegar o importar una invitación sin cámara.";

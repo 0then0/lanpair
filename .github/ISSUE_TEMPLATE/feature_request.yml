@@ -1,0 +1,14 @@
+name: Feature request
+description: Propose a focused diagnostic improvement.
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: User problem and evidence
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Desired behavior and interpretation boundaries
+      description: v0.1 excludes scanning, traffic capture, speed tests, cloud accounts, VPN and monitoring.

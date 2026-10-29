@@ -1,0 +1,234 @@
+{
+  "@@locale": "en",
+  "appTitle": "LANPair",
+  "appSubtitle": "Two devices. Evidence in both directions.",
+  "sessionTab": "Session",
+  "resultsTab": "Results",
+  "historyTab": "History",
+  "settings": "Settings",
+  "close": "Close",
+  "cancel": "Cancel",
+  "save": "Save",
+  "refresh": "Refresh",
+  "copy": "Copy",
+  "copied": "Copied to clipboard",
+  "createSession": "Create session",
+  "joinSession": "Join session",
+  "newSession": "New session",
+  "createTitle": "Start with one device",
+  "createDescription": "Create a private invitation, then transfer it to your other device. Automatic discovery is optional.",
+  "joinDescription": "Paste an invitation or import its file. Both devices can run independently when no connection works.",
+  "invitationLabel": "Session invitation",
+  "invitationHint": "Paste the LANPair invitation here",
+  "importInvitation": "Import invitation file",
+  "scanQr": "Scan QR code",
+  "scanHint": "Point the camera at the invitation QR code on your other device.",
+  "cameraUnavailable": "Camera access is unavailable. Paste or import the invitation instead.",
+  "readinessTitle": "Before you run",
+  "readinessDescription": "Choose the interface connected to your local network. Keep both apps open during the run.",
+  "networkInterface": "Network interface",
+  "noInterfaces": "No usable network interface was found.",
+  "networkPermission": "Local network access",
+  "multicastCapability": "Raw multicast",
+  "discoveryCapability": "System service discovery",
+  "foregroundCapability": "App lifecycle",
+  "openSettings": "Open system settings",
+  "ready": "Ready",
+  "pending": "Not yet checked",
+  "limited": "Limited",
+  "permissionUnknown": "The OS may ask for local network access when a socket or service starts.",
+  "multicastEntitlement": "This build has no raw multicast entitlement. Other checks remain available.",
+  "manualAddress": "Manual peer address",
+  "manualDescription": "Use an address from the selected device. This does not scan the network or discover other devices.",
+  "address": "IP address (IPv6 may include %scope)",
+  "port": "Port",
+  "applyAddress": "Use address",
+  "invalidAddress": "Enter a numeric IP address and a port from 1024 to 65535.",
+  "shareInvitation": "Transfer invitation",
+  "invitationPrivacy": "The invitation contains the session secret. Share it only with your selected device. Reports exclude this secret.",
+  "saveInvitation": "Save invitation file",
+  "showQr": "Show QR code",
+  "qrUnavailable": "The invitation is too large for one QR code. Use paste or file transfer.",
+  "runTitle": "Run the same session on both devices",
+  "runDescription": "Start both devices while their listeners are ready. If they cannot connect, export each journal and merge them later. Exact clock synchronization is not required.",
+  "startRun": "Start bounded checks",
+  "cancelRun": "Cancel checks",
+  "running": "Collecting observations",
+  "runFinished": "Run complete",
+  "runOnce": "This run is saved. Create a new session for another run so old observations cannot be mixed with new ones.",
+  "resultsTitle": "Evidence by direction",
+  "resultsDescription": "Each direction is a separate test. A timeout records an event not observed within the test window; it does not identify a cause.",
+  "noResults": "No observations yet",
+  "noResultsDescription": "Create or join a session and run the checks to collect evidence.",
+  "peerMissing": "Only this device’s journal is available. Import the other journal to reconcile delivery and acknowledgements.",
+  "peerMerged": "Both device journals are included. Imported observations are peer claims, not cryptographic proof.",
+  "importReport": "Import and merge journal",
+  "exportReport": "Export report",
+  "checkDetails": "Check details",
+  "rawObservations": "Raw observations",
+  "noEvidence": "No matching observation was recorded.",
+  "interpretation": "Interpretation",
+  "scopeDisclaimer": "LANPair tests its own sockets and service. Success does not prove that another app works; its permissions, firewall rules, ports and discovery method may differ.",
+  "discoveryExplanation": "Raw multicast measures socket delivery. DNS-SD tests discovery of LANPair’s own service through the OS. Neither measures a third-party app’s discovery.",
+  "historyTitle": "Saved on this device",
+  "historyEmpty": "No saved runs",
+  "historyDescription": "Completed, cancelled and interrupted runs stay here. No account or server is needed.",
+  "merged": "Both journals",
+  "localOnly": "One journal",
+  "exportTitle": "Review before exporting",
+  "exportDescription": "Reports include session and run identifiers, platform capabilities, parameters, observations and interface information. They never contain the session secret.",
+  "addressesIncluded": "Network addresses in this report",
+  "noAddresses": "No network addresses were recorded.",
+  "redact": "Replace private details with consistent aliases",
+  "redactDescription": "Redacted reports are for sharing. Use original JSON journals to merge results across devices.",
+  "jsonReport": "JSON journal",
+  "readableReport": "Readable report",
+  "language": "Language",
+  "theme": "Appearance",
+  "systemTheme": "System",
+  "lightTheme": "Light",
+  "darkTheme": "Dark",
+  "systemLanguage": "System language",
+  "privacyTitle": "Private by design",
+  "privacyDescription": "No telemetry, cloud account, subnet scanning or traffic capture. Tests contact only the device you explicitly select.",
+  "keyboardHelp": "Keyboard: Ctrl/Cmd+N creates a session, Ctrl/Cmd+O imports an invitation, Ctrl/Cmd+E exports, Escape cancels a run.",
+  "passed": "Passed",
+  "failed": "Failed",
+  "inconclusive": "Inconclusive",
+  "unsupported": "Unsupported",
+  "permissionDenied": "Permission denied",
+  "cancelled": "Cancelled",
+  "tcp": "TCP connection",
+  "udp": "UDP unicast",
+  "multicast": "Multicast delivery",
+  "dnssd": "DNS-SD service discovery",
+  "ipv4": "IPv4",
+  "ipv6": "IPv6",
+  "systemFamily": "System API",
+  "errorTitle": "Action could not be completed",
+  "errorInvalidInvitation": "The invitation is damaged, too large or incompatible. Transfer the complete original invitation.",
+  "errorInvalidReport": "The journal is damaged, incompatible or belongs to another run. Existing observations were preserved.",
+  "errorNetwork": "The network action could not complete. Review readiness and keep both apps open.",
+  "errorFile": "The file could not be read or saved. Choose another file or location.",
+  "errorUnsupported": "This action is unavailable on this platform or build.",
+  "errorGeneric": "The action did not complete. Your saved journals remain available.",
+  "technicalDetails": "Technical details",
+  "technicalCode": "Technical code: {code}",
+  "sessionIdentifier": "Session {id}",
+  "runIdentifier": "Run {id}",
+  "localDevice": "This device: {role}",
+  "direction": "{from} → {to}",
+  "elapsed": "{milliseconds} ms monotonic",
+  "packetSequence": "Packet {sequence}",
+  "observationCount": "{count, plural, =0{No observations} =1{1 observation} other{{count} observations}}",
+  "@technicalCode": {
+    "placeholders": {
+      "code": {
+        "type": "String"
+      }
+    }
+  },
+  "@sessionIdentifier": {
+    "placeholders": {
+      "id": {
+        "type": "String"
+      }
+    }
+  },
+  "@runIdentifier": {
+    "placeholders": {
+      "id": {
+        "type": "String"
+      }
+    }
+  },
+  "@localDevice": {
+    "placeholders": {
+      "role": {
+        "type": "String"
+      }
+    }
+  },
+  "@direction": {
+    "placeholders": {
+      "from": {
+        "type": "String"
+      },
+      "to": {
+        "type": "String"
+      }
+    }
+  },
+  "@elapsed": {
+    "placeholders": {
+      "milliseconds": {
+        "type": "int",
+        "format": "decimalPattern"
+      }
+    }
+  },
+  "@packetSequence": {
+    "placeholders": {
+      "sequence": {
+        "type": "int",
+        "format": "decimalPattern"
+      }
+    }
+  },
+  "@observationCount": {
+    "placeholders": {
+      "count": {
+        "type": "int",
+        "format": "decimalPattern"
+      }
+    }
+  },
+  "reasonTcpConnected": "The receiving device accepted a separate TCP connection in this direction.",
+  "reasonPeerReceived": "The peer journal records receiving the matching packet, even if its acknowledgement did not return.",
+  "reasonAcknowledgement": "A matching receipt acknowledgement returned to the sending device.",
+  "reasonServiceResolved": "The peer’s LANPair test service was discovered and resolved through the system API.",
+  "reasonPermissionDenied": "The platform reported that the required permission was denied.",
+  "reasonUnsupported": "This check is unavailable for this platform, build, interface or address family. Missing IPv6 is not evidence of a network fault.",
+  "reasonCancelled": "The user cancelled the run before a conclusive result was collected.",
+  "reasonInterrupted": "The app was suspended or the network changed. Start a new run to collect comparable evidence.",
+  "reasonProbeError": "A local socket or system API reported an error. The recorded error does not establish the network’s root cause.",
+  "reasonTimeout": "The expected event was not observed within the bounded test window. This does not identify why.",
+  "reasonMissingObservations": "There are not enough matching observations to determine this result.",
+  "reasonDeliveryUnknown": "The local socket sent the packet. Delivery is unknown without a peer receipt or returned acknowledgement.",
+  "reasonPeerMissing": "The receiving device’s journal is not available for this direction.",
+  "observationSent": "Sent by local socket",
+  "observationReceived": "Matching peer packet received",
+  "observationAcknowledged": "Receipt acknowledgement returned",
+  "observationConnected": "TCP connection established",
+  "observationTimedOut": "Expected event not observed in time",
+  "observationError": "Local operation reported an error",
+  "observationUnsupported": "Capability unavailable",
+  "observationPermissionDenied": "Required permission denied",
+  "observationCancelled": "Run cancelled by user",
+  "observationSuspended": "App suspended",
+  "observationNetworkChanged": "Network changed during run",
+  "observationPublished": "LANPair test service published",
+  "observationDiscovered": "Peer test service discovered",
+  "observationResolved": "Peer test service resolved",
+  "reportMetadata": "Report metadata",
+  "appVersion": "App version",
+  "protocolVersion": "Protocol version",
+  "reportVersion": "Report version",
+  "platform": "Platform",
+  "capabilities": "Reported capabilities",
+  "parameters": "Check parameters",
+  "wallClock": "Wall-clock time (UTC)",
+  "monotonicDuration": "Monotonic duration",
+  "sourceDevice": "Reporting device",
+  "observationIdentifier": "Observation identifier",
+  "networkChanged": "The network changed. Start a new session before running more checks.",
+  "menuEdit": "Edit",
+  "journalDevice": "Journal source: {role}",
+  "@journalDevice": {
+    "placeholders": {
+      "role": {
+        "type": "String"
+      }
+    }
+  }
+}

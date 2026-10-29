@@ -28,8 +28,8 @@ target_compile_definitions(${BINARY_NAME} PRIVATE "FLUTTER_VERSION_MINOR=${FLUTT
 target_compile_definitions(${BINARY_NAME} PRIVATE "FLUTTER_VERSION_PATCH=${FLUTTER_VERSION_PATCH}")
 target_compile_definitions(${BINARY_NAME} PRIVATE "FLUTTER_VERSION_BUILD=${FLUTTER_VERSION_BUILD}")
 
-# Disable Windows macros that collide with C++ standard library functions.
-target_compile_definitions(${BINARY_NAME} PRIVATE "NOMINMAX")
+# Avoid legacy Winsock declarations and C++ standard library macro collisions.
+target_compile_definitions(${BINARY_NAME} PRIVATE "NOMINMAX" "WIN32_LEAN_AND_MEAN")
 target_compile_definitions(${BINARY_NAME} PRIVATE "_WIN32_WINNT=0x0A00" "WINVER=0x0A00")
 
 # Add dependency libraries and include directories. Add any application-specific

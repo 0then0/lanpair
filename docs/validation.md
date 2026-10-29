@@ -51,13 +51,13 @@ CI defines checks and native builds on platform-appropriate runners. Linux's sta
 
 ## Platform validation
 
-The available local validation evidence for v0.1 is:
+The validation available for v0.1 is described below. Native builds and the Linux startup test run in [CI](https://github.com/0then0/lanpair/actions/workflows/ci.yml); check the result for the exact commit you use.
 
-- **Android:** debug and unsigned release APKs compiled against API 37.0, targeting API 37. A debug signature and release checksum were checked. Emulator and physical-device/LAN behavior remain unverified.
-- **macOS:** shared automated tests run on a macOS host and the native DNS-SD adapter has been typechecked. A full app build, installation and physical LAN run remain unverified.
-- **iOS:** shared UI tests include the iOS platform variant. A native build, simulator run and physical-device tests remain unverified. Raw multicast is disabled in the default build.
-- **Windows:** native runner source and CI build configuration are present. Native compilation, runtime integration and physical LAN behavior remain unverified.
-- **Linux:** native runner source and CI build configuration are present. GTK/Avahi runtime integration, native compilation and physical LAN behavior remain unverified.
+- **Android:** CI compiles the debug APK. Debug and unsigned release APKs were also compiled locally against API 37.0, targeting API 37; a debug signature and release checksum were checked. Emulator and physical-device/LAN behavior remain unverified.
+- **macOS:** CI checks release compilation. Shared automated tests also run on a macOS host. Native application runtime, installation and physical LAN behavior remain unverified.
+- **iOS:** CI checks unsigned release compilation; shared UI tests include the iOS platform variant. Simulator and physical-device tests remain unverified. Raw multicast is disabled in the default build.
+- **Windows:** CI checks release compilation. Native application runtime and physical LAN behavior remain unverified.
+- **Linux:** CI checks release compilation and application startup under Xvfb/D-Bus, including native channel registration. Peer DNS-SD/Avahi behavior and physical LAN probes remain unverified.
 
 This evidence describes the kinds of checks completed, not certification of every platform or a promise that an arbitrary later checkout has passed. Validate the exact commit and artifacts you intend to use. Update this section when additional reproducible native/device evidence is available.
 

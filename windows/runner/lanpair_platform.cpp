@@ -1,5 +1,5 @@
-#include "lanpair_platform.h"
 #include <winsock2.h>
+#include "lanpair_platform.h"
 #include <ws2tcpip.h>
 #include <windns.h>
 #include <shellapi.h>

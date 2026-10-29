@@ -4,6 +4,7 @@
 
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Flutter 3.47.8](https://img.shields.io/badge/Flutter-3.47.8-02569B.svg)](https://docs.flutter.dev/install/archive)
+[![CI](https://github.com/0then0/lanpair/actions/workflows/ci.yml/badge.svg)](https://github.com/0then0/lanpair/actions/workflows/ci.yml)
 
 LANPair diagnoses connectivity **between two devices you explicitly pair** on a local network. It checks each direction separately, distinguishes direct connections from service discovery, and combines both devices' observations into a report.
 
@@ -13,7 +14,7 @@ For example:
 
 A timeout records an event that was not observed. It does not identify a router, firewall, or permission rule as the cause. A successful LANPair check also cannot prove another application's connectivity: that application's ports, permissions, firewall rules and discovery mechanisms may differ.
 
-LANPair v0.1 includes source for Android, iOS, macOS, Windows and Linux. Android debug and unsigned release builds have been checked locally. Other native builds and physical two-device LAN behavior have not yet been verified. See [platform validation](docs/validation.md#platform-validation) for the evidence and remaining checks. Build from source using the instructions below; signing and installation requirements are described in [distribution](docs/distribution.md).
+LANPair v0.1 includes Android, iOS, macOS, Windows and Linux runners. CI runs the shared checks and native builds, including a Linux startup integration check. A successful build does not establish physical two-device LAN behavior, which remains unverified. Check [CI for the commit you use](https://github.com/0then0/lanpair/actions/workflows/ci.yml) and [platform validation](docs/validation.md#platform-validation) for the coverage and remaining checks. Build from source using the instructions below; signing and installation requirements are described in [distribution](docs/distribution.md).
 
 ## What it checks
 

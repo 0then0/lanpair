@@ -1,7 +1,7 @@
 name: lanpair
 description: Bounded, evidence-based diagnostics between two explicitly paired LAN devices.
 publish_to: none
-version: 0.1.0+1
+version: 0.1.1+2
 
 environment:
   sdk: '>=3.13.0 <4.0.0'

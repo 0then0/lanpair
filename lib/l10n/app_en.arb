@@ -39,11 +39,12 @@
   "permissionUnknown": "The OS may ask for local network access when a socket or service starts.",
   "multicastEntitlement": "This build has no raw multicast entitlement. Other checks remain available.",
   "manualAddress": "Manual peer address",
-  "manualDescription": "Use an address from the selected device. This does not scan the network or discover other devices.",
+  "manualDescription": "Use an address from the selected device. This does not scan the network or discover other devices. Without a control channel, start the check on the other device too, ideally within a few seconds: attempts are spread over the window, but a very late start is reported as inconclusive.",
   "address": "IP address (IPv6 may include %scope)",
   "port": "Port",
   "applyAddress": "Use address",
   "invalidAddress": "Enter a numeric IP address and a port from 1024 to 65535.",
+  "peerAddressIsLocal": "That is this device’s own address and TCP port. Enter the other device’s address.",
   "shareInvitation": "Transfer invitation",
   "invitationPrivacy": "The invitation contains the session secret. Share it only with your selected device. Reports exclude this secret.",
   "saveInvitation": "Save invitation file",
@@ -128,6 +129,16 @@
       }
     }
   },
+  "detailConnectionRefused": "Connection attempt refused",
+  "detailConnectTimeout": "No connection within the attempt timeout",
+  "detailHostUnreachable": "System reported the address as unreachable",
+  "detailReplyMissing": "Connected, but no reply arrived in time",
+  "detailReplyInvalid": "Connected, but the reply was not a valid authenticated acknowledgement",
+  "detailDnsSdPublishFailed": "Publishing the test service failed",
+  "detailDnsSdBrowseFailed": "Browsing for the peer’s service failed",
+  "detailDnsSdResolveFailed": "Resolving the peer’s service failed",
+  "detailDnsSdUnattributed": "A system discovery error that cannot be tied to a direction",
+  "detailPeerAddressIsLocal": "Peer address and port equal this device’s own",
   "@sessionIdentifier": {
     "placeholders": {
       "id": {
@@ -183,7 +194,6 @@
       }
     }
   },
-  "reasonTcpConnected": "The receiving device accepted a separate TCP connection in this direction.",
   "reasonPeerReceived": "The peer journal records receiving the matching packet, even if its acknowledgement did not return.",
   "reasonAcknowledgement": "A matching receipt acknowledgement returned to the sending device.",
   "reasonServiceResolved": "The peer’s LANPair test service was discovered and resolved through the system API.",
@@ -196,6 +206,17 @@
   "reasonMissingObservations": "There are not enough matching observations to determine this result.",
   "reasonDeliveryUnknown": "The local socket sent the packet. Delivery is unknown without a peer receipt or returned acknowledgement.",
   "reasonPeerMissing": "The receiving device’s journal is not available for this direction.",
+  "reasonPeerConfirmed": "The expected LANPair participant answered with an authenticated reply, or recorded the authenticated probe, in this direction.",
+  "reasonPeerConfirmedAfterRetry": "The expected participant was confirmed on a later attempt. Earlier attempts in the sequence failed; see the raw observations.",
+  "reasonTcpConnectedUnconfirmed": "A TCP connection was accepted, but no authenticated reply from the expected participant was seen. Another service on that address and port, or a peer that was not yet running, cannot be ruled out.",
+  "reasonPeerNotConfirmed": "The peer reported it was ready, but the service that accepted the TCP connection did not identify itself as the expected participant. Check the peer address and TCP port.",
+  "reasonConnectionRefused": "The peer reported it was ready, but every TCP connection attempt was actively refused. This does not identify why.",
+  "reasonPeerNotListening": "Every TCP connection attempt was refused: nothing accepted connections while the attempts were made. If the peer had not started yet, this does not show a network fault.",
+  "reasonHostUnreachable": "The system reported the peer’s address as unreachable. Without confirmation that the peer was running, this does not identify the cause.",
+  "reasonPeerAddressIsLocal": "The peer address and port are this device’s own, so the check could not reach another device.",
+  "reasonDiscoveryPublishFailed": "This device could not publish its LANPair test service, so the peer could not resolve it.",
+  "reasonDiscoveryBrowseFailed": "This device could not browse for the peer’s LANPair test service, so it could not resolve it.",
+  "reasonDiscoveryResolveFailed": "This device found the peer’s LANPair test service, but resolving it failed.",
   "observationSent": "Sent by local socket",
   "observationReceived": "Matching peer packet received",
   "observationAcknowledged": "Receipt acknowledgement returned",

@@ -32,6 +32,7 @@ Observation _event(
   String reporter = 'a',
   int elapsed = 1000,
   int? sequence,
+  String? code,
   IpFamily family = IpFamily.ipv4,
 }) => Observation(
   id: id,
@@ -44,6 +45,7 @@ Observation _event(
   elapsedMicros: elapsed,
   wallTime: _time,
   sequence: sequence,
+  code: code,
   interfaceName: reporter == 'a' ? 'en0' : 'wlan0',
 );
 
@@ -129,7 +131,7 @@ void main() {
       final encoded =
           jsonDecode(ReportCodec.encode(report)) as Map<String, dynamic>;
       final analysis = encoded['interpretation'] as Map<String, dynamic>;
-      expect(analysis['version'], 1);
+      expect(analysis['version'], interpretationVersion);
       final results = analysis['results'] as List;
       expect(results, hasLength(14));
       final delivery = results.cast<Map>().firstWhere(
@@ -214,17 +216,12 @@ void main() {
     expect(result.reason, 'acknowledgement_received');
   });
 
-  test('each TCP direction requires a separate outgoing connection', () {
+  test('each TCP direction requires its own authenticated exchange', () {
     final report = _report(
       events: [
         _event('connected', ObservationKind.connected, check: CheckKind.tcp),
-        _event(
-          'reply',
-          ObservationKind.received,
-          check: CheckKind.tcp,
-          from: 'b',
-          to: 'a',
-        ),
+        // The reply on A's own connection says nothing about B connecting to A.
+        _event('reply', ObservationKind.acknowledged, check: CheckKind.tcp),
         _event(
           'reverse_timeout',
           ObservationKind.timedOut,
@@ -237,14 +234,14 @@ void main() {
     expect(_result(report, check: CheckKind.tcp).outcome, Outcome.passed);
     expect(
       _result(report, check: CheckKind.tcp, from: 'b').outcome,
-      Outcome.failed,
+      isNot(Outcome.passed),
     );
   });
 
   test('unicast can pass while multicast remains unobserved', () {
     final report = _report(
       events: [
-        _event('tcp', ObservationKind.connected, check: CheckKind.tcp),
+        _event('tcp', ObservationKind.acknowledged, check: CheckKind.tcp),
         _event('udp', ObservationKind.acknowledged),
         _event('multicast', ObservationKind.sent, check: CheckKind.multicast),
         _event('timeout', ObservationKind.timedOut, check: CheckKind.multicast),
@@ -601,4 +598,324 @@ void main() {
       );
     },
   );
+
+  group('TCP evidence and failure causes', () {
+    const ready = {'a.peerReadiness': 'confirmed'};
+    CheckResult tcp(RunReport r, {String from = 'a'}) =>
+        _result(r, check: CheckKind.tcp, from: from);
+    Observation attempt(
+      String id,
+      String code, {
+      int? seq,
+      String reporter = 'a',
+    }) => _event(
+      id,
+      ObservationKind.error,
+      check: CheckKind.tcp,
+      code: code,
+      sequence: seq,
+      reporter: reporter,
+    );
+
+    test('a bare connect is transport evidence, not a participant', () {
+      // This is also what a LANPair 0.1.0 journal contains for a TCP "pass".
+      final report = _report(
+        events: [_event('c', ObservationKind.connected, check: CheckKind.tcp)],
+      );
+      final result = tcp(report);
+      expect(result.outcome, Outcome.inconclusive);
+      expect(result.reason, 'tcp_connected_peer_unconfirmed');
+      expect(result.evidenceIds, ['c']);
+    });
+
+    test('with a ready peer the same connect is a failed identification', () {
+      final report = _report(
+        capabilities: ready,
+        events: [
+          _event('c', ObservationKind.connected, check: CheckKind.tcp),
+          attempt('m', 'tcp_reply_invalid', seq: 0),
+        ],
+      );
+      expect(tcp(report).outcome, Outcome.failed);
+      expect(tcp(report).reason, 'peer_not_confirmed');
+      expect(tcp(report).evidenceIds, containsAll(['c', 'm']));
+    });
+
+    test(
+      'an authenticated reply or the peer receipt proves the participant',
+      () {
+        final replied = _report(
+          events: [
+            _event('c', ObservationKind.connected, check: CheckKind.tcp),
+            _event('r', ObservationKind.acknowledged, check: CheckKind.tcp),
+          ],
+        );
+        expect(tcp(replied).outcome, Outcome.passed);
+        expect(tcp(replied).reason, 'peer_confirmed');
+        expect(tcp(replied).evidenceIds, ['r']);
+
+        final lost = _report(
+          events: [
+            _event('c', ObservationKind.connected, check: CheckKind.tcp),
+            attempt('m', 'tcp_reply_missing', seq: 0),
+          ],
+        );
+        expect(tcp(lost).outcome, Outcome.inconclusive);
+        final merged = ReportCodec.merge(
+          lost,
+          _report(
+            reporter: 'b',
+            events: [
+              _event(
+                'rx',
+                ObservationKind.received,
+                check: CheckKind.tcp,
+                reporter: 'b',
+                sequence: 0,
+              ),
+            ],
+          ),
+        );
+        expect(tcp(merged).outcome, Outcome.passed);
+        expect(tcp(merged).evidenceIds, ['rx']);
+      },
+    );
+
+    test('a later confirmation outranks earlier failed attempts', () {
+      final report = _report(
+        events: [
+          attempt('x0', 'connection_refused', seq: 0),
+          attempt('x1', 'connect_timeout', seq: 1),
+          _event(
+            'c',
+            ObservationKind.connected,
+            check: CheckKind.tcp,
+            sequence: 2,
+          ),
+          _event(
+            'r',
+            ObservationKind.acknowledged,
+            check: CheckKind.tcp,
+            sequence: 2,
+          ),
+        ],
+      );
+      expect(tcp(report).outcome, Outcome.passed);
+      expect(tcp(report).reason, 'peer_confirmed_after_retry');
+      expect(report.observations.map((o) => o.id), contains('x0'));
+    });
+
+    test('refusal without a ready peer is not a network verdict', () {
+      final report = _report(
+        events: [
+          attempt('x0', 'connection_refused', seq: 0),
+          attempt('x1', 'connection_refused', seq: 1),
+          _event('t', ObservationKind.timedOut, check: CheckKind.tcp),
+        ],
+      );
+      expect(tcp(report).outcome, Outcome.inconclusive);
+      expect(tcp(report).reason, 'peer_not_listening');
+      expect(tcp(report).evidenceIds, containsAll(['x0', 'x1', 't']));
+    });
+
+    test('failures with a ready peer stay failures with their own reason', () {
+      for (final entry in {
+        'connection_refused': 'connection_refused',
+        'connect_timeout': 'timeout_observed',
+        'host_unreachable': 'host_unreachable',
+      }.entries) {
+        final report = _report(
+          capabilities: ready,
+          events: [attempt('x', entry.key, seq: 0)],
+        );
+        expect(tcp(report).outcome, Outcome.failed, reason: entry.key);
+        expect(tcp(report).reason, entry.value);
+      }
+    });
+
+    test('unconfirmed timeouts and unreachable hosts are inconclusive', () {
+      expect(
+        tcp(_report(events: [attempt('x', 'connect_timeout')])).reason,
+        'timeout_observed',
+      );
+      expect(
+        tcp(_report(events: [attempt('x', 'host_unreachable')])).outcome,
+        Outcome.inconclusive,
+      );
+      expect(
+        tcp(
+          _report(
+            events: [
+              _event('t', ObservationKind.timedOut, check: CheckKind.tcp),
+            ],
+          ),
+        ).outcome,
+        Outcome.inconclusive,
+      );
+    });
+
+    test('local socket errors remain failures whatever the peer did', () {
+      for (final code in ['network_unreachable', 'socket_error_98']) {
+        final result = tcp(_report(events: [attempt('x', code)]));
+        expect(result.outcome, Outcome.failed, reason: code);
+        expect(result.reason, 'probe_error');
+      }
+    });
+
+    test('a peer address equal to this device is not a network result', () {
+      final result = tcp(
+        _report(
+          events: [
+            _event(
+              'self',
+              ObservationKind.unsupported,
+              check: CheckKind.tcp,
+              code: 'peer_address_is_local',
+            ),
+          ],
+        ),
+      );
+      expect(result.outcome, Outcome.inconclusive);
+      expect(result.reason, 'peer_address_is_local');
+    });
+
+    test('a connect survives later cancellation as evidence', () {
+      final result = tcp(
+        _report(
+          events: [
+            _event('c', ObservationKind.connected, check: CheckKind.tcp),
+            _event('x', ObservationKind.cancelled, check: CheckKind.tcp),
+          ],
+        ),
+      );
+      expect(result.reason, 'tcp_connected_peer_unconfirmed');
+    });
+  });
+
+  group('discovery error causes', () {
+    CheckResult dns(RunReport r, String from) =>
+        _result(r, check: CheckKind.dnsSd, from: from, family: IpFamily.system);
+    Observation failure(
+      String code, {
+      required String from,
+      required String to,
+    }) => _event(
+      code,
+      ObservationKind.error,
+      check: CheckKind.dnsSd,
+      family: IpFamily.system,
+      from: from,
+      to: to,
+      code: code,
+    );
+
+    test('publish, browse and resolve failures stay distinct and directed', () {
+      final report = _report(
+        events: [
+          failure('dns_sd_publish_failed', from: 'a', to: 'b'),
+          failure('dns_sd_browse_failed', from: 'b', to: 'a'),
+        ],
+      );
+      expect(dns(report, 'a').reason, 'discovery_publish_failed');
+      expect(dns(report, 'b').reason, 'discovery_browse_failed');
+      final resolve = _report(
+        events: [failure('dns_sd_resolve_failed', from: 'b', to: 'a')],
+      );
+      expect(dns(resolve, 'b').reason, 'discovery_resolve_failed');
+      expect(dns(resolve, 'a').outcome, isNot(Outcome.failed));
+    });
+
+    test('an observation without a direction cannot fail either direction', () {
+      final report = _report(
+        events: [failure('dns_sd_resolve_unattributed', from: 'a', to: 'a')],
+      );
+      for (final from in ['a', 'b']) {
+        expect(dns(report, from).outcome, isNot(Outcome.failed));
+      }
+    });
+
+    test('legacy generic discovery errors keep their old meaning', () {
+      final report = _report(
+        events: [failure('discovery_operation_failed', from: 'a', to: 'b')],
+      );
+      expect(dns(report, 'a').reason, 'probe_error');
+    });
+  });
+
+  group('journals written by LANPair 0.1.0', () {
+    CheckResult tcp(RunReport r) => _result(r, check: CheckKind.tcp);
+
+    test('cached 0.1.0 conclusions are recomputed, never trusted', () {
+      final report = _report(
+        events: [_event('c', ObservationKind.connected, check: CheckKind.tcp)],
+      );
+      final encoded =
+          jsonDecode(ReportCodec.encode(report)) as Map<String, dynamic>;
+      final analysis = encoded['interpretation'] as Map<String, dynamic>;
+      analysis['version'] = 1;
+      for (final entry in (analysis['results'] as List).cast<Map>()) {
+        if (entry['check'] == 'tcp' &&
+            entry['family'] == 'ipv4' &&
+            entry['fromDeviceId'] == 'a') {
+          // What 0.1.0 exported for a bare connect.
+          entry['outcome'] = 'passed';
+          entry['reason'] = 'tcp_connected';
+        }
+      }
+      final imported = ReportCodec.decode(jsonEncode(encoded));
+      final result = tcp(imported);
+      expect(result.outcome, Outcome.inconclusive);
+      expect(result.reason, 'tcp_connected_peer_unconfirmed');
+    });
+
+    test(
+      'current conclusions are still verified, unknown versions refused',
+      () {
+        final report = _report(
+          events: [
+            _event('c', ObservationKind.connected, check: CheckKind.tcp),
+          ],
+        );
+        final encoded =
+            jsonDecode(ReportCodec.encode(report)) as Map<String, dynamic>;
+        final analysis = encoded['interpretation'] as Map<String, dynamic>;
+        analysis['version'] = interpretationVersion + 1;
+        expect(
+          () => ReportCodec.decode(jsonEncode(encoded)),
+          throwsFormatException,
+        );
+      },
+    );
+
+    test('a 0.1.0 and a 0.1.1 journal of one run still merge', () {
+      final old = _report(
+        events: [_event('c', ObservationKind.connected, check: CheckKind.tcp)],
+      );
+      final current = _report(
+        reporter: 'b',
+        capabilities: const {'b.peerReadiness': 'unconfirmed'},
+        events: [
+          _event(
+            'rx',
+            ObservationKind.received,
+            check: CheckKind.tcp,
+            reporter: 'b',
+          ),
+        ],
+      );
+      final merged = ReportCodec.merge(old, current);
+      expect(tcp(merged).outcome, Outcome.passed);
+      expect(
+        ReportCodec.decode(ReportCodec.encode(merged)).observations,
+        hasLength(2),
+      );
+    });
+
+    test('readiness statements survive redaction', () {
+      final redacted = ReportCodec.redact(
+        _report(capabilities: const {'a.peerReadiness': 'confirmed'}),
+      );
+      expect(redacted.capabilities['a.peerReadiness'], 'confirmed');
+    });
+  });
 }

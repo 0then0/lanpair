@@ -1254,7 +1254,17 @@ class _WorkspaceState extends State<_Workspace> {
   };
 
   String _reason(String value) => switch (value) {
-    'tcp_connected' => s.reasonTcpConnected,
+    'peer_confirmed' => s.reasonPeerConfirmed,
+    'peer_confirmed_after_retry' => s.reasonPeerConfirmedAfterRetry,
+    'tcp_connected_peer_unconfirmed' => s.reasonTcpConnectedUnconfirmed,
+    'peer_not_confirmed' => s.reasonPeerNotConfirmed,
+    'connection_refused' => s.reasonConnectionRefused,
+    'peer_not_listening' => s.reasonPeerNotListening,
+    'host_unreachable' => s.reasonHostUnreachable,
+    'peer_address_is_local' => s.reasonPeerAddressIsLocal,
+    'discovery_publish_failed' => s.reasonDiscoveryPublishFailed,
+    'discovery_browse_failed' => s.reasonDiscoveryBrowseFailed,
+    'discovery_resolve_failed' => s.reasonDiscoveryResolveFailed,
     'peer_received' => s.reasonPeerReceived,
     'acknowledgement_received' => s.reasonAcknowledgement,
     'service_resolved' => s.reasonServiceResolved,
@@ -1273,6 +1283,22 @@ class _WorkspaceState extends State<_Workspace> {
     'sent_delivery_unknown' => s.reasonDeliveryUnknown,
     'peer_observation_missing' => s.reasonPeerMissing,
     _ => s.technicalCode(value),
+  };
+
+  /// Explains machine codes attached to observations; unknown codes stay raw.
+  String _detail(String code) => switch (code) {
+    'connection_refused' => s.detailConnectionRefused,
+    'connect_timeout' => s.detailConnectTimeout,
+    'host_unreachable' => s.detailHostUnreachable,
+    'tcp_reply_missing' => s.detailReplyMissing,
+    'tcp_reply_invalid' => s.detailReplyInvalid,
+    'dns_sd_publish_failed' => s.detailDnsSdPublishFailed,
+    'dns_sd_browse_failed' => s.detailDnsSdBrowseFailed,
+    'dns_sd_resolve_failed' => s.detailDnsSdResolveFailed,
+    'dns_sd_resolve_unattributed' ||
+    'dns_sd_error_unattributed' => s.detailDnsSdUnattributed,
+    'peer_address_is_local' => s.detailPeerAddressIsLocal,
+    _ => s.technicalCode(code),
   };
 
   String _observation(String value) => switch (value) {
@@ -1306,6 +1332,7 @@ class _WorkspaceState extends State<_Workspace> {
     'unsupported' => s.errorUnsupported,
     'permission_denied' => s.reasonPermissionDenied,
     'invalidAddress' => s.invalidAddress,
+    'peerAddressIsLocal' => s.peerAddressIsLocal,
     'noInterface' => s.noInterfaces,
     'networkChanged' => s.networkChanged,
     'sessionRequired' => s.noResultsDescription,
@@ -1448,8 +1475,12 @@ class _WorkspaceState extends State<_Workspace> {
                   ],
                   if (observation.sequence != null)
                     Text(s.packetSequence(observation.sequence!)),
-                  if (observation.detail != null)
-                    SelectableText(s.technicalCode(observation.detail!)),
+                  if (observation.detail != null) ...[
+                    SelectableText(_detail(observation.detail!)),
+                    if (_detail(observation.detail!) !=
+                        s.technicalCode(observation.detail!))
+                      SelectableText(s.technicalCode(observation.detail!)),
+                  ],
                 ],
               ],
             ),
@@ -1496,7 +1527,8 @@ class _WorkspaceState extends State<_Workspace> {
               '${report.redacted || observation.wallTime == null ? '' : '; ${s.wallClock}: ${observation.wallTime}'}'
               '${observation.interfaceName == null ? '' : '; ${s.networkInterface}: ${observation.interfaceName}'}'
               '${observation.id == null ? '' : '; ${s.observationIdentifier}: ${observation.id}'}'
-              '${observation.sequence == null ? '' : '; ${s.packetSequence(observation.sequence!)}'}',
+              '${observation.sequence == null ? '' : '; ${s.packetSequence(observation.sequence!)}'}'
+              '${observation.detail == null ? '' : '; ${_detail(observation.detail!)}'}',
         '',
       ]);
     }

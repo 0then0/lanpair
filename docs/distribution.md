@@ -63,7 +63,7 @@ On Windows, use `Get-FileHash -Algorithm SHA256` in PowerShell and compare the r
 
 ## Android signing
 
-Android compiles against SDK 37.0, targets API 37, and uses Java 17, AGP 9.1.1 and Gradle 9.3.1. The SDK Manager platform identifier is `platforms;android-37.0`; Flutter also requires its build tools and NDK.
+Android compiles against SDK 37.0, targets API 37, and uses Java 17, AGP 9.5.0 and Gradle 9.8.2 (`android/settings.gradle.kts`, `android/gradle/wrapper/gradle-wrapper.properties`). Dependabot updates these files; the previous local builds used AGP 9.1.1 and Gradle 9.3.1, and the current pins have not been built locally. The SDK Manager platform identifier is `platforms;android-37.0`; Flutter also requires its build tools and NDK.
 
 For a signed release, provide your existing keystore through these environment variables:
 
@@ -78,6 +78,20 @@ flutter build apk --release
 Use your secret manager or local shell environment to supply real values. Keep keystores outside the repository and keep passwords out of logs. Without this configuration, the release APK must be signed with your key before installation. A debug keystore is not substituted for release signing.
 
 Inspect the final APK's manifest and signature, install it on a test device and complete the relevant [physical validation scenarios](validation.md#physical-two-device-procedure). Signing does not establish that local-network permission, discovery or multicast works on the target OS.
+
+`tool/package_release.py android` copies `build/app/outputs/flutter-apk/app-release.apk` and names it `lanpair-android.apk` when it carries a v1 or v2+ signature, and `lanpair-android-unsigned.apk` (with a warning) when it does not. It only detects that a signature is present; it does not verify it or identify the key. Verify with `apksigner verify --verbose --print-certs`.
+
+### Installing on Android
+
+- Package `org.lanpair.lanpair`; minimum Android 7.0 (API 24, the pinned Flutter SDK's default), target and compile API 37 (Android 17). Version name and code come from `pubspec.yaml`: `0.1.1+2` is name 0.1.1, code 2.
+- `flutter build apk --release` makes one universal APK (about 66 MB) with `arm64-v8a`, `armeabi-v7a` and `x86_64` libraries. No app bundle, ABI split or ABI filter is configured. The 64-bit libraries of the checked 0.1.0 APK are stored uncompressed, 16 KB aligned, with 16 KB or larger ELF segment alignment.
+- **An unsigned APK is not installable.** Android requires every APK to carry a signature before it is installed or updated ([app signing](https://developer.android.com/studio/publish/app-signing)). The CI artifact `lanpair-android-unsigned` and `dist/lanpair-android-unsigned.apk` are unsigned by design: no key is configured in the repository or workflow. The installer refuses it on every Android version; the wording of the message varies by device. Sign it with your own key, as described above, before giving it to anyone. A throwaway or debug key is acceptable for one-off testing only: a later release signed with another key cannot update it.
+- **Updating** an installed copy requires the same signing certificate and a version code that is not lower than the installed one (increase the number after `+` in `pubspec.yaml` for every APK you distribute). A different key makes the installer refuse the update; uninstalling first removes the app's saved report history.
+- A `debug` APK from `flutter build apk --debug` is signed with a debug key and installs, but is not a release.
+- `ACCESS_LOCAL_NETWORK` is a runtime permission asked when LANPair first needs the LAN, after installation. It does not decide whether the package installs ([Android local network permission](https://developer.android.com/privacy-and-security/local-network-permission)).
+- Google's [developer verification](https://developer.android.com/developer-verification) program requires apps on certified devices to come from registered developers. Google's published plan starts protections on September 30, 2026 in Brazil, Indonesia, Singapore and Thailand and extends them to all regions in 2027, with an advanced flow for unverified apps; the page speaks of installs from participating stores, so check its current wording for sideloaded APKs. It applies to certified devices running Android 7 and newer, not only Android 17. Whether it blocks a given sideloaded LANPair APK depends on the device region and your registration; it cannot be determined from this repository.
+
+When an installation fails, collect: the installer's exact message (or `adb install` output, such as `INSTALL_PARSE_FAILED_NO_CERTIFICATES`, `INSTALL_FAILED_UPDATE_INCOMPATIBLE`, `INSTALL_FAILED_VERSION_DOWNGRADE`), the APK file name and SHA-256, the output of `apksigner verify --print-certs`, the device model, Android build and region, and whether LANPair was installed before.
 
 ## macOS signing and notarization
 

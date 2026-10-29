@@ -188,7 +188,7 @@ class FakeController extends LanPairController {
         family: 'ipv4',
         direction: 'A → B',
         status: 'passed',
-        reason: 'tcp_connected',
+        reason: 'peer_confirmed',
         observations: [
           ObservationView(code: 'connected', device: 'A', elapsedMs: 22),
         ],

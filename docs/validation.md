@@ -20,6 +20,8 @@ flutter test
 - session/invitation validation and strict, bounded report imports;
 - interpretation by direction and address family, lost acknowledgements, duplicate/conflicting observations and journal reconciliation;
 - actual loopback TCP/UDP, pinned HTTPS, deadlines, cancellation and resource cleanup;
+- staggered and too-late independent starts, TCP participant proof against silent, garbage-answering and echoing listeners, connecting to this device's own address, and DNS-SD error direction;
+- control listener ownership across inactive, paused and resumed transitions and new sessions;
 - report history and preservation of existing journals;
 - locally rendered QR decoding, including rotated codes and ambiguous invitations;
 - widget, localization, text-scaling, control-label and tap-target checks.
@@ -53,7 +55,7 @@ CI defines checks and native builds on platform-appropriate runners. Linux's sta
 
 The validation available for v0.1 is described below. Native builds and the Linux startup test run in [CI](https://github.com/0then0/lanpair/actions/workflows/ci.yml); check the result for the exact commit you use.
 
-- **Android:** CI compiles the debug APK. Debug and unsigned release APKs were also compiled locally against API 37.0, targeting API 37; a debug signature and release checksum were checked. Emulator and physical-device/LAN behavior remain unverified.
+- **Android:** CI compiles the debug APK. Debug and unsigned release APKs were also compiled locally against API 37.0, targeting API 37; a debug signature and release checksum were checked. The unsigned release APK cannot be installed. No installation on any Android version, including Android 17, has been performed or verified; see [installing on Android](distribution.md#installing-on-android). Emulator and physical-device/LAN behavior remain unverified.
 - **macOS:** CI checks release compilation. Shared automated tests also run on a macOS host. Native application runtime, installation and physical LAN behavior remain unverified.
 - **iOS:** CI checks unsigned release compilation; shared UI tests include the iOS platform variant. Simulator and physical-device tests remain unverified. Raw multicast is disabled in the default build.
 - **Windows:** CI checks release compilation. Native application runtime and physical LAN behavior remain unverified.
@@ -71,10 +73,10 @@ Run these scenarios:
 2. **Asymmetric reachability.** On an isolated lab setup, restrict one direction and repeat the run. Confirm the result identifies which observations are missing without claiming the restriction's cause. Do not change a contributor's working firewall or shared network to create this condition.
 3. **Unicast passes, multicast is unobserved.** Retain positive direct observations while comparing multicast sends and peer receipts. Verify own-device packets cannot establish success. Test raw multicast separately from DNS-SD; an unsupported raw probe does not reproduce packet loss.
 4. **Permission denied and restored.** Deny local-network access in system Settings, inspect readiness and run behavior, then grant access, return to the app and refresh readiness. Start a new run and verify recovery. Check native prompts as well as capability labels.
-5. **No control channel.** Transfer the same invitation offline, enter endpoints manually, and start the independent runs with overlapping windows. Export both original JSONs, transfer them privately and merge. Missing delivery evidence must remain inconclusive. Check file dialogs or the mobile share sheet on both devices.
+5. **No control channel.** Transfer the same invitation offline, enter endpoints manually, and start the independent runs. Repeat with the second start after about 1, 3 and 5 seconds. Expect the early offsets to be reached in both directions and the late one to leave the first device's direction `inconclusive` (not `failed`) while the other direction passes. Also try the peer address of the device itself, a different application listening on the TCP port and a peer that is not running. Export both original JSONs, transfer them privately and merge. Missing delivery evidence must remain inconclusive. Check file dialogs or the mobile share sheet on both devices.
 6. **Interruption.** Background the app or change the network during the active window. Confirm the saved journal records interruption, collected positive observations remain available, resources are released and a new session can run afterward.
 
-Exact clock synchronization is unnecessary. Local stopwatch durations belong to their reporting device, and a peer's wall clock cannot establish packet ordering. Independent windows must overlap for positive receipt evidence.
+Exact clock synchronization is unnecessary. Local stopwatch durations belong to their reporting device, and neither a peer's wall clock nor its stopwatch is compared with the local one. Independent windows must overlap for positive receipt evidence, and overlap alone is not enough: see [coordinated and independent starts](protocol.md#coordinated-and-independent-starts).
 
 On iOS, raw multicast requires an entitlement-approved physical build; see [platform notes](platforms.md#ios). A simulator cannot establish the behavior of local-network privacy or the signed multicast entitlement.
 

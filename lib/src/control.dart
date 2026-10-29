@@ -7,6 +7,13 @@ import 'package:crypto/crypto.dart';
 import 'identity.dart';
 import 'model.dart';
 
+/// Thrown by the start handler when this device did not begin a run for the
+/// request (already running, finished or busy). The peer then gets 409 and
+/// must not treat this device as ready.
+class StartDeclined implements Exception {
+  const StartDeclined();
+}
+
 /// Authenticated, certificate-pinned HTTPS; discovery is never required.
 /// Credentials exist only in invitations and Authorization headers.
 class ControlLink {
@@ -21,22 +28,49 @@ class ControlLink {
   final Future<void> Function() onStart;
   final Future<void> Function(String report) onReport;
   HttpServer? _server;
+  Future<void>? _opening;
+  bool _closed = false;
   int _requests = 0;
   int _inflight = 0;
 
-  Future<void> open() async {
+  /// A link has one lifecycle: created, opened at most once, closed for good.
+  /// The owner creates a new link for every listener it needs.
+  bool get isOpen => _server != null && !_closed;
+  bool get isClosed => _closed;
+  String? _boundAddress;
+  int? _boundPort;
+
+  /// Whether the open listener serves [session]'s local endpoint.
+  bool serves(Session session) =>
+      isOpen &&
+      this.session.sessionId == session.sessionId &&
+      _boundAddress == session.local.address &&
+      _boundPort == session.local.controlPort;
+
+  Future<void> open() {
+    if (_closed) return Future.error(StateError('Control link is closed.'));
+    return _opening ??= _bind();
+  }
+
+  Future<void> _bind() async {
+    final address = session.local.address;
+    final port = session.local.controlPort;
     final context = SecurityContext(withTrustedRoots: false)
       ..useCertificateChainBytes(
         utf8.encode(session.localIdentity.certificatePem),
       )
       ..usePrivateKeyBytes(utf8.encode(session.localIdentity.privateKeyPem));
-    _server = await HttpServer.bindSecure(
-      session.local.address,
-      session.local.controlPort,
-      context,
-    );
-    _server!.idleTimeout = const Duration(seconds: 2);
-    _server!.listen((request) => unawaited(_handle(request)));
+    final server = await HttpServer.bindSecure(address, port, context);
+    if (_closed) {
+      // close() was requested while the bind was pending: never publish it.
+      await server.close(force: true);
+      return;
+    }
+    _server = server;
+    _boundAddress = address;
+    _boundPort = port;
+    server.idleTimeout = const Duration(seconds: 2);
+    server.listen((request) => unawaited(_handle(request)));
   }
 
   Future<void> _handle(HttpRequest request) async {
@@ -75,8 +109,12 @@ class ControlLink {
         case '/start':
           // Joining explicitly accepts this one bounded run. Duplicate starts
           // are rejected by the controller and never allocate a second run.
-          await onStart().timeout(const Duration(seconds: 2));
-          request.response.write('{}');
+          try {
+            await onStart().timeout(const Duration(seconds: 2));
+            request.response.write('{}');
+          } on StartDeclined {
+            request.response.statusCode = HttpStatus.conflict;
+          }
         case '/report':
           await onReport(jsonEncode(value['report']));
           request.response.write('{}');
@@ -154,9 +192,18 @@ class ControlLink {
     }
   }
 
+  /// Releases the listener. Safe to call repeatedly and while [open] is
+  /// still pending; in that case the late bind is closed as soon as it ends.
   Future<void> close() async {
-    await _server?.close(force: true);
+    _closed = true;
+    final server = _server;
     _server = null;
+    await server?.close(force: true);
+    try {
+      await _opening;
+    } catch (_) {
+      /* A failed bind leaves nothing to release. */
+    }
   }
 }
 

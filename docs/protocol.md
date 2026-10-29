@@ -50,9 +50,40 @@ a new run ID. An invitation's run ID lets disconnected participants execute
 the same experiment independently and later correlate their observations.
 
 Every participant starts its own stopwatch. Sequence numbers and run IDs
-correlate events; wall clocks do not establish ordering between participants.
-Independent windows need to overlap for a packet to be observed. A missed
-window is not distinguishable from a lost packet without additional evidence.
+correlate events; wall clocks do not establish ordering between participants,
+and one participant's stopwatch is never compared with the other's.
+
+### Coordinated and independent starts
+
+Each journal records `<participant>.peerReadiness` among its capabilities:
+
+- `confirmed`: the control channel showed that the peer's listeners were open
+  before this participant sent anything. The initiator's `/start` request was
+  accepted, or the peer's authenticated `/start` request started this run.
+  The attempts then follow each other at the plan's interval.
+- `unconfirmed`: the run was started independently, or the control channel
+  failed. Journals written before 0.1.1 contain no statement and are treated
+  as `unconfirmed`.
+
+In an independent start the peer can open its listeners at any moment, so the
+same fixed budget of attempts per check and family is spread over the window:
+the first at its start and the last early enough (at most one second, a quarter
+of the window for short plans) to finish before the window ends. The spacing is
+never smaller than the plan's interval. With the default plan the TCP and UDP
+attempts fall at 0, 2.5 and 5 seconds.
+
+If the peer's listeners are open for one spacing while this participant is
+still sending, one attempt falls inside that time. This is an opportunity, not
+a guarantee: a finite number of probes cannot ensure delivery for every
+overlap, and overlapping windows alone prove nothing. A peer that starts after
+the last attempt, or a probe that is lost, leaves a direction without evidence.
+Exact clock synchronization is not needed and not used.
+
+What a direction needs in order to be called `passed` is evidence that the
+expected participant took part, defined under "Interpretation semantics". What
+it needs in order to be called `failed` is evidence that the peer was ready
+(`confirmed`), plus attempt errors that could not come from an absent peer.
+Anything else is `inconclusive`, with the attempt causes kept as observations.
 
 ## Protected control channel
 
@@ -81,8 +112,35 @@ observations or prevent manual report export and merging.
 
 A TCP result refers to an actual outgoing `Socket.connect` from the named
 source. A response on an existing connection cannot establish the reverse
-direction. A successful TCP connect says that this port accepted a connection;
-it does not establish the permissions or discovery behavior of another app.
+direction. Two facts are kept apart:
+
+- **Transport connection.** A successful `connect` is recorded as `connected`.
+  It says only that something at that address and port accepted a TCP
+  connection. It could be another application, a proxy, a stale listener, or,
+  when the entered address is this device's own, this device itself.
+- **Participant confirmation.** After connecting, the source sends the
+  authenticated probe and expects an authenticated acknowledgement, recorded as
+  `acknowledged`. The reply is accepted only when its HMAC is valid and it names
+  this session and run, the expected peer as sender and this device as
+  receiver, `tcp` as the check, the same family and the same sequence as the
+  probe. The target independently records `received` for a valid probe.
+
+Each attempt that connected but received no valid reply is followed by a
+non-terminal `error` observation, `tcp_reply_missing` or `tcp_reply_invalid`.
+A refused, timed-out or unreachable attempt is likewise recorded as an `error`
+with `connection_refused`, `connect_timeout` or `host_unreachable`; the codes
+are the same on every platform. These attempt errors are not final: a later
+attempt may still confirm the peer. Other errors, such as
+`network_unreachable` or `socket_error_<n>`, report a local operation failure.
+
+A peer endpoint equal to this device's own address and TCP or UDP port is not
+probed. The engine records `unsupported` with `peer_address_is_local`; manual
+entry rejects it. Addresses are compared as parsed addresses together with the
+port, not as text: another interface of the same host or the same address with
+another port is a different endpoint.
+
+A successful TCP connect does not establish the permissions or discovery
+behavior of another app.
 
 Probe messages are UTF-8 JSON, at most 1200 bytes. The envelope contains `p`,
 the canonical encoded payload, and `h`, an HMAC-SHA256 of those exact bytes
@@ -123,6 +181,19 @@ identify the expected peer service. Publication, discovery and resolution
 are separate observations. Only resolution of the matching peer service
 passes the directed system discovery result.
 
+Native errors name the failed operation and are attached to the direction that
+operation affects. A direction X to Y passes when Y resolves X's service, so a
+failed publication on the reporting device belongs to the local to peer
+direction (`dns_sd_publish_failed`, reason `discovery_publish_failed`), and a
+failed browse on the reporting device belongs to the peer to local direction
+(`dns_sd_browse_failed`, reason `discovery_browse_failed`). A failed resolution is attributed to the peer to
+local direction only when the adapter names the peer's service
+(`dns_sd_resolve_failed`). The Android adapter does; other adapters currently
+report a resolution failure without the service, which is recorded as
+`dns_sd_resolve_unattributed` with this device as both ends, so it cannot make
+either direction `failed`. A permission refusal affects both directions of the
+reporting device. A later successful resolution still passes the direction.
+
 A Bonjour/NSD result does not substitute for the raw multicast socket check.
 Neither experiment proves that a third-party application's discovery will
 work. Platform entitlement, permission and system-daemon limitations remain
@@ -161,16 +232,28 @@ Interpretation operates on raw observations and returns stable reason keys
 and the evidence IDs used. UI and human reports localize these keys. Evidence
 of a successful observation remains useful if the run is cancelled later.
 
-- **passed**: TCP has a source-side `connected` event; UDP has a target-side
-  `received` event or a source-side `acknowledged` event; multicast has a
-  target-side matching `received` event; DNS-SD has a target-side matching
-  `resolved` event. Address families and directions never share success.
-- **failed**: a local check operation reports an error, or a configured TCP
-  connection was not established within the observation window. This states
-  the failed operation, not a firewall/router diagnosis.
+- **passed**: TCP has a source-side `acknowledged` event (the authenticated
+  reply) or a target-side `received` event (the peer's own record of the
+  authenticated probe); UDP has a target-side `received` event or a source-side
+  `acknowledged` event; multicast has a target-side matching `received` event;
+  DNS-SD has a target-side matching `resolved` event. A bare TCP `connected`
+  event is never a pass. Address families and directions never share success.
+  If TCP was confirmed only after earlier failed attempts, the reason is
+  `peer_confirmed_after_retry`; the failed attempts stay in the sequence.
+- **failed**: a local check operation reports an error, including a failed
+  DNS-SD publication, browse or resolution; or the sender recorded
+  `peerReadiness: confirmed` and every TCP attempt was refused, timed out or was
+  unreachable (`connection_refused`, `timeout_observed`, `host_unreachable`), or
+  a connection was accepted by a service that did not identify itself as the
+  participant (`peer_not_confirmed`). This states the failed operation, not a
+  firewall/router diagnosis.
 - **inconclusive**: a delivery/resolve expectation was not observed, only a
   local UDP/multicast send was observed, evidence or peer configuration is
-  missing, or suspension/network change interrupted the window.
+  missing, or suspension/network change interrupted the window. For TCP without
+  a confirmed-ready peer this includes refused attempts (`peer_not_listening`),
+  timeouts or unreachable addresses (`timeout_observed`, `host_unreachable`),
+  a connection without a valid reply (`tcp_connected_peer_unconfirmed`) and a
+  peer endpoint equal to this device (`peer_address_is_local`).
 - **unsupported**: the platform or selected address family cannot perform
   that check, including unavailable IPv6 or raw multicast entitlement.
 - **permission denied**: a known permission refusal prevents the check.
@@ -200,9 +283,30 @@ merged together; merge raw files locally first, then redact the result.
 
 ## Exported interpretation grounds
 
-JSON exports add an `interpretation` envelope with version 1 and 14 directional
+JSON exports add an `interpretation` envelope with 14 directional
 results. Each result stores its check/family, source/target IDs, outcome, stable
 reason code, and the observation IDs used as evidence. Import recomputes these
 results from the raw observations and rejects inconsistent cached conclusions.
 Raw participant messages may omit this envelope; the receiver still computes its
 own interpretation. The envelope contains no localized text or credentials.
+
+## Compatibility with LANPair 0.1.0 journals
+
+Report and protocol format versions stay at 1: 0.1.1 adds only new observation
+codes and one capability key, `<participant>.peerReadiness`, which 0.1.0 reads
+as an ordinary categorical capability. The interpretation envelope moves to
+version 2 because the rules changed.
+
+- A 0.1.1 application interprets every imported journal with the 0.1.1 rules,
+  whoever wrote it. A 0.1.0 `connected` event is a transport connection and is
+  never read as an authenticated exchange; it passes only together with an
+  `acknowledged` or a peer `received` event.
+- Cached conclusions in a version 1 envelope were produced by the old rules.
+  They are checked for shape and then ignored, so 0.1.0 journals remain
+  importable and can show a different result than they did in 0.1.0. A version 2
+  envelope must match the recomputed result exactly. Other versions are refused.
+- Journals from both versions of one run can be merged. Without
+  `peerReadiness` a sender is treated as `unconfirmed`.
+- LANPair 0.1.0 interprets 0.1.1 journals with its own rules: it counts a bare
+  `connected` event as success and shows attempt errors as `probe_error`. Use
+  0.1.1 on the device that merges and reads mixed journals.

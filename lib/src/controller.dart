@@ -16,9 +16,18 @@ import 'storage.dart';
 import 'ui_contract.dart';
 
 class AppController extends LanPairController with WidgetsBindingObserver {
-  AppController({PlatformBridge? platform, this._store})
-    : _platform = platform ?? PlatformBridge();
+  AppController({
+    PlatformBridge? platform,
+    this._store,
+    @visibleForTesting this.interfaceLister,
+    @visibleForTesting this.controlPort,
+  }) : _platform = platform ?? PlatformBridge();
   final PlatformBridge _platform;
+
+  /// Test seams: a fixed interface list (which may include loopback) and a
+  /// control port other than the default.
+  final Future<List<NetworkInterface>> Function()? interfaceLister;
+  final int? controlPort;
   ReportStore? _store;
   Session? _session;
   ControlLink? _control;
@@ -72,6 +81,22 @@ class AppController extends LanPairController with WidgetsBindingObserver {
 
   void _notify() {
     if (!_disposed) notifyListeners();
+  }
+
+  // Returns to the foreground are handled one after another.
+  Future<void> _resumeChain = Future<void>.value();
+
+  /// Completes when queued lifecycle work and control listener changes ended.
+  @visibleForTesting
+  Future<void> get settled async {
+    Future<void> resumes, controls;
+    do {
+      resumes = _resumeChain;
+      controls = _controlQueue;
+      await resumes;
+      await controls;
+    } while (!identical(resumes, _resumeChain) ||
+        !identical(controls, _controlQueue));
   }
 
   Future<void> _guard(
@@ -270,12 +295,18 @@ class AppController extends LanPairController with WidgetsBindingObserver {
 
   Future<void> _refresh({required bool request}) async {
     _capabilities = await _platform.capabilities(request: request);
-    _interfaces = await NetworkInterface.list(includeLinkLocal: true);
-    _interfaces.removeWhere((i) => i.addresses.every((a) => a.isLoopback));
+    _interfaces = await _listInterfaces();
     if (!_interfaces.any((i) => i.name == _selected)) {
       _selected = _interfaces.firstOrNull?.name;
     }
     _networkSignature = _signature(_interfaces);
+  }
+
+  Future<List<NetworkInterface>> _listInterfaces() async {
+    if (interfaceLister != null) return interfaceLister!();
+    final networks = await NetworkInterface.list(includeLinkLocal: true);
+    networks.removeWhere((i) => i.addresses.every((a) => a.isLoopback));
+    return networks;
   }
 
   DeviceEndpoint _localEndpoint(String id) {
@@ -297,6 +328,7 @@ class AppController extends LanPairController with WidgetsBindingObserver {
       ipv6Address: v6,
       interfaceName: network.name,
       interfaceIndex: network.index,
+      controlPort: controlPort ?? 45833,
     );
   }
 
@@ -366,9 +398,43 @@ class AppController extends LanPairController with WidgetsBindingObserver {
     }
   }, code: 'invalidInvitation');
 
-  Future<void> _openControl() async {
-    final session = _session!;
-    _control = ControlLink(
+  // Control listeners are opened and closed strictly one at a time. Lifecycle
+  // callbacks, interface changes and new sessions can overlap; each queued
+  // operation decides from the state at the moment it runs.
+  Future<void> _controlQueue = Future<void>.value();
+
+  Future<void> _serializeControl(Future<void> Function() operation) {
+    final result = _controlQueue.then((_) => operation());
+    _controlQueue = result.then((_) {}, onError: (Object _) {});
+    return result;
+  }
+
+  /// Replaces the listener with a fresh one for the current session.
+  Future<void> _openControl() => _serializeControl(_replaceControl);
+
+  /// Opens the listener only when the current one does not already serve the
+  /// current session, for example after `inactive` to `resumed`.
+  Future<void> _ensureControl() => _serializeControl(() async {
+    final session = _session;
+    if (session != null && _control?.serves(session) == true) return;
+    await _replaceControl();
+  });
+
+  Future<void> _closeControl({bool forget = false}) =>
+      _serializeControl(() async {
+        final link = _control;
+        if (forget) _control = null;
+        await link?.close();
+      });
+
+  Future<void> _replaceControl() async {
+    await _control?.close();
+    final session = _session;
+    if (_disposed || session == null) {
+      _control = null;
+      return;
+    }
+    final link = ControlLink(
       session: session,
       onHello: (endpoint) async {
         if (_running || _completed) return;
@@ -376,11 +442,11 @@ class AppController extends LanPairController with WidgetsBindingObserver {
           _session!.localRole == DeviceRole.a ? DeviceRole.b : DeviceRole.a,
           endpoint,
         );
-        _control!.session = _session!;
+        _control?.session = _session!;
         _notify();
       },
       onStart: () async {
-        if (_running || _completed || _busy) return;
+        if (_running || _completed || _busy) throw const StartDeclined();
         final ready = Completer<void>();
         unawaited(_run(notifyPeer: false, ready: ready));
         await ready.future.timeout(const Duration(seconds: 2));
@@ -396,10 +462,21 @@ class AppController extends LanPairController with WidgetsBindingObserver {
         }
       },
     );
+    _control = link;
     try {
-      if (_capabilities['permission'] != 'denied') await _control!.open();
+      if (_capabilities['permission'] != 'denied') {
+        await link.open();
+        // The earlier failure no longer describes the current state.
+        if (identical(_control, link) && _error == 'controlUnavailable') {
+          _error = null;
+          _notify();
+        }
+      }
     } catch (_) {
-      _error = 'controlUnavailable';
+      if (identical(_control, link)) {
+        _error = 'controlUnavailable';
+        _notify();
+      }
     }
   }
 
@@ -419,6 +496,23 @@ class AppController extends LanPairController with WidgetsBindingObserver {
         port > 65535) {
       throw const FormatException('Invalid peer address.');
     }
+    final local = _session!.local;
+    final own = [local.address, local.ipv6Address]
+        .whereType<String>()
+        .map((a) => InternetAddress.tryParse(a.split('%').first))
+        .whereType<InternetAddress>();
+    if (port == local.tcpPort &&
+        own.any(
+          (a) =>
+              a.type == parsed.type &&
+              a.rawAddress.length == parsed.rawAddress.length &&
+              Iterable.generate(a.rawAddress.length)
+                  .every((i) => a.rawAddress[i] == parsed.rawAddress[i]),
+        )) {
+      // This device's own TCP listener would answer, not the peer.
+      _error = 'peerAddressIsLocal';
+      return;
+    }
     final peer = _session!.peer.copyWith(
       address: address,
       ipv6Address: parsed.type == InternetAddressType.IPv6 ? address : null,
@@ -437,7 +531,6 @@ class AppController extends LanPairController with WidgetsBindingObserver {
     }
     _selected = name;
     if (_session != null) {
-      await _control?.close();
       _session = _session!.withEndpoint(
         _session!.localRole,
         _localEndpoint(_session!.local.id),
@@ -449,7 +542,6 @@ class AppController extends LanPairController with WidgetsBindingObserver {
   Future<void> refreshReadiness() => _guard(() async {
     await _refresh(request: true);
     if (_session != null && !_completed) {
-      await _control?.close();
       _session = _session!.withEndpoint(
         _session!.localRole,
         _localEndpoint(_session!.local.id),
@@ -495,12 +587,15 @@ class AppController extends LanPairController with WidgetsBindingObserver {
       _report = await engine.run(
         onReady: () async {
           if (ready != null && !ready.isCompleted) ready.complete();
-          if (notifyPeer) {
-            try {
-              await _control?.post('/start');
-            } catch (_) {
-              /* Independent run remains useful. */
-            }
+          // A peer that started this run had its listeners open first.
+          if (!notifyPeer) return true;
+          try {
+            await _control!.post('/start');
+            return true;
+          } catch (_) {
+            // Independent run remains useful, but the peer's readiness is
+            // unknown and the engine spreads its attempts over the window.
+            return false;
           }
         },
       );
@@ -697,17 +792,24 @@ class AppController extends LanPairController with WidgetsBindingObserver {
       _foreground = false;
       _engine?.cancel(reason: ObservationKind.suspended);
       _checkpoint();
-      unawaited(_control?.close());
+      unawaited(_closeControl());
     } else if (state == AppLifecycleState.resumed) {
       _foreground = true;
-      unawaited(
-        _guard(() async {
-          await _refresh(request: false);
-          if (_session != null && !_running && !_completed) {
-            await _openControl();
-          }
-        }),
-      );
+      _resumeChain = _resumeChain.then((_) => _resume());
+    }
+  }
+
+  Future<void> _resume() async {
+    try {
+      // A refresh during a run or another operation would replace the state
+      // those depend on and hide a network change from the poll.
+      if (!_busy && !_running) await _refresh(request: false);
+      if (_disposed || !_foreground) return;
+      if (_session != null && !_running && !_completed) await _ensureControl();
+      _notify();
+    } catch (_) {
+      _error = 'operationFailed';
+      _notify();
     }
   }
 
@@ -715,12 +817,11 @@ class AppController extends LanPairController with WidgetsBindingObserver {
     if (_checkingNetwork || _disposed) return;
     _checkingNetwork = true;
     try {
-      final networks = await NetworkInterface.list(includeLinkLocal: true);
-      networks.removeWhere((i) => i.addresses.every((a) => a.isLoopback));
+      final networks = await _listInterfaces();
       if (_signature(networks) != _networkSignature) {
         _engine?.cancel(reason: ObservationKind.networkChanged);
         _checkpoint();
-        await _control?.close();
+        await _closeControl();
         _interfaces = networks;
         _networkSignature = _signature(networks);
         _error = 'networkChanged';
@@ -747,8 +848,7 @@ class AppController extends LanPairController with WidgetsBindingObserver {
 
   Future<void> _stopSession() async {
     _engine?.cancel();
-    await _control?.close();
-    _control = null;
+    await _closeControl(forget: true);
   }
 
   @override

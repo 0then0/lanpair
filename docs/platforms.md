@@ -13,7 +13,7 @@ authenticates a peer. The authenticated control channel does that separately.
 
 ## Android
 
-The app targets API 37 and compiles against API 37.0 with AGP 9.1.1. Install Android SDK Platform 37 in
+The app targets API 37 and compiles against API 37.0 with AGP 9.5.0 and Gradle 9.8.2 (see `android/settings.gradle.kts`). Install Android SDK Platform 37 in
 addition to the SDK/build tools required by the pinned Flutter SDK. Android 17
 requires `ACCESS_LOCAL_NETWORK` at runtime for apps targeting 37 or later. The
 manifest declares it, and the native bridge requests it before diagnostics.
@@ -59,7 +59,7 @@ flutter build apk --release
 ```
 
 Without this configuration the release APK is unsigned and cannot be installed
-until signed. A debug keystore is never silently used for a release. Keep the
+until signed (see [installing on Android](distribution.md#installing-on-android)). A debug keystore is never silently used for a release. Keep the
 keystore and passwords outside the repository and uploaded artifacts. For local
 development, `flutter run` or `flutter build apk --debug` uses the normal Android
 debug signing workflow.

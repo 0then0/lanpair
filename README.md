@@ -10,15 +10,15 @@ LANPair diagnoses connectivity **between two devices you explicitly pair** on a 
 
 For example:
 
-> TCP connections succeeded in both directions. Device B did not record receiving A's test multicast packets during its observation window.
+> TCP connections were confirmed by the other device in both directions. Device B did not record receiving A's test multicast packets during its observation window.
 
 A timeout records an event that was not observed. It does not identify a router, firewall, or permission rule as the cause. A successful LANPair check also cannot prove another application's connectivity: that application's ports, permissions, firewall rules and discovery mechanisms may differ.
 
-LANPair v0.1 includes Android, iOS, macOS, Windows and Linux runners. CI runs the shared checks and native builds, including a Linux startup integration check. A successful build does not establish physical two-device LAN behavior, which remains unverified. Check [CI for the commit you use](https://github.com/0then0/lanpair/actions/workflows/ci.yml) and [platform validation](docs/validation.md#platform-validation) for the coverage and remaining checks. Build from source using the instructions below; signing and installation requirements are described in [distribution](docs/distribution.md).
+LANPair v0.1 includes Android, iOS, macOS, Windows and Linux runners. CI runs the shared checks and native builds, including a Linux startup integration check. A successful build does not establish physical two-device LAN behavior, which remains unverified. Check [CI for the commit you use](https://github.com/0then0/lanpair/actions/workflows/ci.yml) and [platform validation](docs/validation.md#platform-validation) for the coverage and remaining checks. Build from source using the instructions below; signing and installation requirements are described in [distribution](docs/distribution.md). An Android release APK built or downloaded from CI without a signing key is **unsigned and cannot be installed**; see [installing on Android](docs/distribution.md#installing-on-android).
 
 ## What it checks
 
-- A separate outgoing TCP connection in each direction.
+- A separate outgoing TCP connection in each direction, confirmed by an authenticated exchange with the other device. A connection that anything else accepts is reported as a connection only.
 - Small authenticated UDP unicast probes, distinguishing local sends, peer receipts and returned acknowledgements.
 - Raw multicast probes on the selected interface, with IPv4 and IPv6 checked separately. Receiving the device's own packets cannot count as success.
 - Publication, discovery and resolution of LANPair's `_lanpair._tcp` service through Android NSD, Apple Bonjour, Windows DNS-SD or Linux Avahi.
@@ -45,7 +45,7 @@ Replace `<device-id>` with an ID from `flutter devices`. Desktop target IDs incl
 
 Target prerequisites:
 
-- **Android:** Java 17, Android SDK Platform 37.0 and Flutter's Android build tools. The app targets API 37.
+- **Android:** Java 17, Android SDK Platform 37.0 and Flutter's Android build tools. The app targets API 37 and supports Android 7.0 (API 24) and newer.
 - **iOS/macOS:** full Xcode with the selected native SDK. Installing on an iOS device also requires a development team and provisioning.
 - **Windows:** Visual Studio with the desktop C++ workload and the Windows SDK.
 - **Linux:** Clang, CMake, Ninja, pkg-config, GTK 3 development headers and the C++ standard library. A running system Avahi service is needed for DNS-SD only.
@@ -73,7 +73,7 @@ A missing UDP acknowledgement does not prove missing delivery. The receiving dev
 
 1. Transfer the same invitation from A to B using an available offline method.
 2. Enter B's numeric address on A under **Manual peer address**, and verify A's address on B. The TCP port is editable. UDP, HTTPS control and multicast use ports 45832, 45833 and 45834 in v0.1.
-3. Start each device independently while both apps are visible. The default window is six seconds. The devices do not need synchronized clocks, but their observation windows must overlap for packets to be received.
+3. Start each device independently while both apps are visible, ideally within a few seconds of each other. The default window is six seconds. The devices do not need synchronized clocks. Without a working control channel each device spreads its few attempts over its own window (with the default plan at 0, 2.5 and 5 seconds), so a start a little later than the first device is usually still met. Overlapping windows do not guarantee delivery: a device that starts after the other's last attempt, or a lost packet, leaves that direction inconclusive instead of failed. A refused or timed-out TCP attempt is reported as a failure only when the control channel had confirmed the peer was ready.
 4. Export each device's **original, unredacted JSON** and transfer the files privately.
 5. Open a journal in History and import its counterpart. Review the combined results, then export a redacted copy for sharing.
 

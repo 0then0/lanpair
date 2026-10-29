@@ -33,6 +33,8 @@ class CheckResult {
   final List<String> evidenceIds;
 }
 
+const _peerSetupCodes = {'peer_address_unavailable', 'peer_address_is_local'};
+
 List<CheckResult> interpret(RunReport report) {
   if (report.devices.length != 2) {
     throw const FormatException('Two participants are required.');
@@ -63,9 +65,14 @@ List<CheckResult> interpret(RunReport report) {
         final success = timely
             .where(
               (o) => switch (check) {
+                // A bare connect is transport evidence only. The expected
+                // participant is proven by its authenticated reply to the
+                // sender, or by its own record of the authenticated probe.
                 CheckKind.tcp =>
-                  o.kind == ObservationKind.connected &&
-                      o.reporterId == from.id,
+                  o.kind == ObservationKind.acknowledged &&
+                          o.reporterId == from.id ||
+                      o.kind == ObservationKind.received &&
+                          o.reporterId == to.id,
                 CheckKind.udp =>
                   o.kind == ObservationKind.received && o.reporterId == to.id ||
                       o.kind == ObservationKind.acknowledged &&
@@ -86,7 +93,16 @@ List<CheckResult> interpret(RunReport report) {
           outcome = Outcome.passed;
           evidence = success;
           reason = switch (check) {
-            CheckKind.tcp => 'tcp_connected',
+            CheckKind.tcp
+                when observations.any(
+                  (o) =>
+                      o.reporterId == from.id &&
+                      o.kind == ObservationKind.error &&
+                      (tcpAttemptCodes.contains(o.code) ||
+                          tcpReplyProblemCodes.contains(o.code)),
+                ) =>
+              'peer_confirmed_after_retry',
+            CheckKind.tcp => 'peer_confirmed',
             CheckKind.udp
                 when success.any((o) => o.kind == ObservationKind.received) =>
               'peer_received',
@@ -102,14 +118,14 @@ List<CheckResult> interpret(RunReport report) {
               .where(
                 (o) =>
                     o.kind == ObservationKind.unsupported &&
-                    o.code != 'peer_address_unavailable',
+                    !_peerSetupCodes.contains(o.code),
               )
               .toList();
           final peerUnconfigured = observations
               .where(
                 (o) =>
                     o.kind == ObservationKind.unsupported &&
-                    o.code == 'peer_address_unavailable',
+                    _peerSetupCodes.contains(o.code),
               )
               .toList();
           final interruption = observations
@@ -123,8 +139,41 @@ List<CheckResult> interpret(RunReport report) {
               .where((o) => o.kind == ObservationKind.cancelled)
               .toList();
           final errors = observations
-              .where((o) => o.kind == ObservationKind.error)
+              .where(
+                (o) =>
+                    o.kind == ObservationKind.error &&
+                    !tcpAttemptCodes.contains(o.code) &&
+                    !tcpReplyProblemCodes.contains(o.code),
+              )
               .toList();
+          final attemptErrors =
+              observations
+                  .where(
+                    (o) =>
+                        o.kind == ObservationKind.error &&
+                        tcpAttemptCodes.contains(o.code),
+                  )
+                  .toList()
+                ..sort((x, y) => x.elapsedMicros.compareTo(y.elapsedMicros));
+          final connected = observations
+              .where(
+                (o) =>
+                    o.kind == ObservationKind.connected &&
+                    o.reporterId == from.id,
+              )
+              .toList();
+          final replyProblems = observations
+              .where(
+                (o) =>
+                    o.kind == ObservationKind.error &&
+                    tcpReplyProblemCodes.contains(o.code),
+              )
+              .toList();
+          // The sender's own statement that the control channel confirmed the
+          // peer was ready when it began sending. Journals written before
+          // 0.1.1 make no such statement.
+          final peerReady =
+              report.capabilities['${from.id}.peerReadiness'] == 'confirmed';
           final timeouts = observations
               .where((o) => o.kind == ObservationKind.timedOut)
               .toList();
@@ -142,6 +191,15 @@ List<CheckResult> interpret(RunReport report) {
             outcome = Outcome.unsupported;
             reason = 'platform_unsupported';
             evidence = unsupported;
+          } else if (check == CheckKind.tcp && connected.isNotEmpty) {
+            // The transport connection happened, the expected participant
+            // did not identify itself. With a confirmed-ready peer the
+            // listener at this address is not that participant.
+            outcome = peerReady ? Outcome.failed : Outcome.inconclusive;
+            reason = peerReady
+                ? 'peer_not_confirmed'
+                : 'tcp_connected_peer_unconfirmed';
+            evidence = [...connected, ...replyProblems];
           } else if (interruption.isNotEmpty) {
             outcome = Outcome.inconclusive;
             reason = 'run_interrupted';
@@ -152,19 +210,38 @@ List<CheckResult> interpret(RunReport report) {
             evidence = cancelled;
           } else if (errors.isNotEmpty) {
             outcome = Outcome.failed;
-            reason = 'probe_error';
+            reason = switch (errors.first.code) {
+              'dns_sd_publish_failed' => 'discovery_publish_failed',
+              'dns_sd_browse_failed' => 'discovery_browse_failed',
+              'dns_sd_resolve_failed' => 'discovery_resolve_failed',
+              _ => 'probe_error',
+            };
             evidence = errors;
           } else if (peerUnconfigured.isNotEmpty) {
             outcome = Outcome.inconclusive;
-            reason = 'missing_observations';
+            reason = peerUnconfigured.first.code == 'peer_address_is_local'
+                ? 'peer_address_is_local'
+                : 'missing_observations';
             evidence = peerUnconfigured;
           } else if (sends.isNotEmpty &&
               (check == CheckKind.udp || check == CheckKind.multicast)) {
             outcome = Outcome.inconclusive;
             reason = 'sent_delivery_unknown';
             evidence = [...sends, ...timeouts];
+          } else if (check == CheckKind.tcp && attemptErrors.isNotEmpty) {
+            // Every attempt failed. Without a confirmed-ready peer these
+            // describe the attempts only and are not a network diagnosis.
+            final last = attemptErrors.last.code;
+            outcome = peerReady ? Outcome.failed : Outcome.inconclusive;
+            reason = switch (last) {
+              'connection_refused' =>
+                peerReady ? 'connection_refused' : 'peer_not_listening',
+              'host_unreachable' => 'host_unreachable',
+              _ => 'timeout_observed',
+            };
+            evidence = [...attemptErrors, ...timeouts];
           } else if (timeouts.isNotEmpty) {
-            outcome = check == CheckKind.tcp
+            outcome = check == CheckKind.tcp && peerReady
                 ? Outcome.failed
                 : Outcome.inconclusive;
             reason = 'timeout_observed';
@@ -206,7 +283,7 @@ class ReportCodec {
   }
 
   static Map<String, Object?> _analysis(RunReport report) => {
-    'version': 1,
+    'version': interpretationVersion,
     'results': interpret(report).map((r) => r.toJson()).toList(),
   };
 
@@ -218,7 +295,8 @@ class ReportCodec {
     if (hasAnalysis) {
       final envelope = jsonObject(analysis, 'interpretation');
       onlyKeys(envelope, {'version', 'results'});
-      if (envelope['version'] != 1) {
+      final version = envelope['version'];
+      if (version != 1 && version != interpretationVersion) {
         throw const FormatException('Unsupported interpretation version.');
       }
       final normalized =
@@ -261,8 +339,12 @@ class ReportCodec {
               ).map((id) => identifier(id, 'evidence id')).toList(),
             };
           }).toList();
-      if (jsonEncode({'version': 1, 'results': normalized}) !=
-          jsonEncode(_analysis(report))) {
+      // Version 1 (LANPair 0.1.0) counted a bare TCP connect as success. Its
+      // cached conclusions are validated for shape only and never trusted;
+      // every result is recomputed from the raw observations.
+      if (version == interpretationVersion &&
+          jsonEncode({'version': version, 'results': normalized}) !=
+              jsonEncode(_analysis(report))) {
         throw const FormatException(
           'Interpretation does not match the supplied observations.',
         );
@@ -390,6 +472,8 @@ class ReportCodec {
       'selected',
       'available',
       'unsupported',
+      'confirmed',
+      'unconfirmed',
       'notDetermined',
       'restricted',
       'redacted',

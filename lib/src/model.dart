@@ -3,9 +3,26 @@ import 'dart:math';
 
 const protocolVersion = 1;
 const reportVersion = 1;
-const appVersion = '0.1.0';
+const appVersion = '0.1.1';
+
+/// Version of the interpretation rules exported with a report. Version 1
+/// (LANPair 0.1.0) treated a bare TCP connect as success; version 2 requires
+/// an authenticated exchange.
+const interpretationVersion = 2;
 const maxImportBytes = 1024 * 1024;
 const maxObservations = 4096;
+const _currentAppVersion = appVersion;
+
+/// Codes of single TCP attempts that failed without proving anything about the
+/// peer. They are non-terminal observations: a later attempt may still succeed.
+const tcpAttemptCodes = {
+  'connection_refused',
+  'connect_timeout',
+  'host_unreachable',
+};
+
+/// The connection was established, but no valid authenticated reply followed.
+const tcpReplyProblemCodes = {'tcp_reply_missing', 'tcp_reply_invalid'};
 
 enum DeviceRole { a, b }
 
@@ -650,7 +667,7 @@ class RunReport {
     required this.startedAt,
     required this.durationMicros,
     this.platform = 'unknown',
-    this.appVersion = '0.1.0',
+    this.appVersion = _currentAppVersion,
     List<String> sourceDeviceIds = const [],
     List<SourceRun> sourceRuns = const [],
     this.redacted = false,

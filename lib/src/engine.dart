@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import 'identity.dart';
 import 'model.dart';
@@ -95,6 +97,60 @@ class ProbePacket {
   }
 }
 
+/// Offsets from the start of this device's window at which the bounded number
+/// of attempts per check and family are made.
+///
+/// With [peerReady] (the control channel confirmed the peer's listeners are
+/// open) attempts are close together. Otherwise the peer may start at any
+/// moment, so the same number of attempts is spread over the window, leaving
+/// a tail for the last attempt to finish. If the peer's listeners stay open
+/// for at least one spacing while this device is still sending, one attempt
+/// falls into that time. That is an opportunity, never a delivery guarantee.
+List<Duration> attemptOffsets(
+  RunPlan plan, {
+  required bool peerReady,
+  bool leadIn = false,
+}) {
+  final count = plan.packetCount;
+  if (peerReady) {
+    final first = leadIn ? plan.intervalMs : 0;
+    return [
+      for (var i = 0; i < count; i++)
+        Duration(milliseconds: first + i * plan.intervalMs),
+    ];
+  }
+  final tail = min(1000, plan.durationMs ~/ 4);
+  final span = plan.durationMs - tail;
+  if (count == 1) return [Duration(milliseconds: span ~/ 2)];
+  final spacing = max(plan.intervalMs, span ~/ (count - 1));
+  return [for (var i = 0; i < count; i++) Duration(milliseconds: i * spacing)];
+}
+
+/// Stable, platform independent code for a failed TCP connection attempt.
+@visibleForTesting
+String connectErrorCode(Object error) {
+  if (error is TimeoutException) return 'connect_timeout';
+  if (error is SocketException) {
+    final errno = error.osError?.errorCode.abs();
+    if (errno == null) {
+      return error.message.toLowerCase().contains('timed out')
+          ? 'connect_timeout'
+          : 'socket_error_unknown';
+    }
+    if ([111, 61, 10061].contains(errno)) return 'connection_refused';
+    if ([110, 60, 10060].contains(errno)) return 'connect_timeout';
+    if ([113, 65, 10065].contains(errno)) return 'host_unreachable';
+    if ([101, 51, 10051].contains(errno)) return 'network_unreachable';
+    return 'socket_error_$errno';
+  }
+  return 'operation_failed';
+}
+
+class _ReplyProblem implements Exception {
+  const _ReplyProblem(this.code);
+  final String code;
+}
+
 class ProbeEngine {
   ProbeEngine({
     required this.session,
@@ -124,6 +180,7 @@ class ProbeEngine {
   Timer? _deadline, _progressTimer;
   bool _active = false;
   bool _used = false;
+  bool _peerReady = false;
   final _acceptedTcp = <IpFamily, int>{};
   DateTime? _started;
   List<Observation> get observations => List.unmodifiable(_observations);
@@ -138,16 +195,21 @@ class ProbeEngine {
     bool incoming = false,
     int? sequence,
     String? code,
+    bool? terminal,
+    bool unattributed = false,
   }) {
     if (!_active || _observations.length >= maxObservations) return;
-    if ([
-      ObservationKind.error,
-      ObservationKind.unsupported,
-      ObservationKind.permissionDenied,
-      ObservationKind.cancelled,
-      ObservationKind.suspended,
-      ObservationKind.networkChanged,
-    ].contains(kind)) {
+    // [terminal] ends the check's window summary. Single failed attempts are
+    // recorded without it so that a later attempt can still succeed.
+    if (terminal ??
+        [
+          ObservationKind.error,
+          ObservationKind.unsupported,
+          ObservationKind.permissionDenied,
+          ObservationKind.cancelled,
+          ObservationKind.suspended,
+          ObservationKind.networkChanged,
+        ].contains(kind)) {
       _terminal.add(_key(check, family, incoming: incoming));
     }
     _observations.add(
@@ -156,8 +218,14 @@ class ProbeEngine {
         reporterId: session.local.id,
         kind: kind,
         check: check,
-        fromDeviceId: incoming ? session.peer.id : session.local.id,
-        toDeviceId: incoming ? session.local.id : session.peer.id,
+        // An unattributed observation names no direction between the two
+        // participants, so no directional result can use it.
+        fromDeviceId: unattributed || !incoming
+            ? session.local.id
+            : session.peer.id,
+        toDeviceId: unattributed || incoming
+            ? session.local.id
+            : session.peer.id,
         family: family,
         sequence: sequence,
         elapsedMicros: _clock.elapsedMicroseconds,
@@ -193,6 +261,9 @@ class ProbeEngine {
     devices: [session.a, session.b],
     parameters: session.plan,
     capabilities: {
+      '${session.local.id}.peerReadiness': _peerReady
+          ? 'confirmed'
+          : 'unconfirmed',
       '${session.local.id}.permission':
           '${capabilities['permission'] ?? 'unknown'}',
       '${session.local.id}.rawMulticast': capabilities['rawMulticast'] == true
@@ -227,7 +298,10 @@ class ProbeEngine {
     ack: ack,
   );
 
-  Future<RunReport> run({Future<void> Function()? onReady}) async {
+  /// [onReady] returns whether the peer is confirmed ready: the control
+  /// channel accepted the start request, or the peer's request started this
+  /// run. `false` or a failure means an independent (manual) start.
+  Future<RunReport> run({Future<bool> Function()? onReady}) async {
     if (_used) throw StateError('A run is single use.');
     _used = true;
     _active = true;
@@ -276,7 +350,9 @@ class ProbeEngine {
             final remaining =
                 Duration(milliseconds: session.plan.durationMs) -
                 _clock.elapsed;
-            if (remaining > Duration.zero) await onReady().timeout(remaining);
+            if (remaining > Duration.zero) {
+              _peerReady = await onReady().timeout(remaining);
+            }
           } catch (_) {
             /* Offline operation still runs the local plan. */
           }
@@ -429,7 +505,21 @@ class ProbeEngine {
         code: _errorCode(e),
       );
     }
-    if (peer != null) {
+    if (peer != null &&
+        _isSameEndpoint(
+          peer,
+          session.peer.tcpPort,
+          local,
+          session.local.tcpPort,
+        )) {
+      // Connecting to our own listener cannot reach the peer.
+      _record(
+        ObservationKind.unsupported,
+        CheckKind.tcp,
+        family,
+        code: 'peer_address_is_local',
+      );
+    } else if (peer != null) {
       _jobs.add(() => _sendTcp(local, peer, family));
     } else {
       _record(
@@ -486,7 +576,20 @@ class ProbeEngine {
           _both(_errorKind(e), CheckKind.udp, family, code: _errorCode(e));
         },
       );
-      if (peer != null) {
+      if (peer != null &&
+          _isSameEndpoint(
+            peer,
+            session.peer.udpPort,
+            local,
+            session.local.udpPort,
+          )) {
+        _record(
+          ObservationKind.unsupported,
+          CheckKind.udp,
+          family,
+          code: 'peer_address_is_local',
+        );
+      } else if (peer != null) {
         _jobs.add(
           () => _sendDatagrams(
             socket,
@@ -633,16 +736,18 @@ class ProbeEngine {
           incoming: true,
           sequence: packet.sequence,
         );
-        socket.add([
-          ..._packet(
-            CheckKind.tcp,
-            family,
-            packet.sequence,
-            ack: true,
-          ).encode(session.secret),
-          10,
-        ]);
-        await socket.flush().timeout(const Duration(seconds: 1));
+        if (!dropAcknowledgements) {
+          socket.add([
+            ..._packet(
+              CheckKind.tcp,
+              family,
+              packet.sequence,
+              ack: true,
+            ).encode(session.secret),
+            10,
+          ]);
+          await socket.flush().timeout(const Duration(seconds: 1));
+        }
       }
     } catch (_) {
       /* Unauthenticated or incomplete input is not evidence. */
@@ -652,17 +757,27 @@ class ProbeEngine {
     }
   }
 
+  /// Resolves `true` at [offset] from the window start, or `false` as soon as
+  /// the window ends or the run is cancelled.
+  Future<bool> _waitUntil(Duration offset) async {
+    final remaining = offset - _clock.elapsed;
+    if (remaining > Duration.zero) {
+      final elapsed = Completer<void>();
+      final timer = Timer(remaining, elapsed.complete);
+      await Future.any([elapsed.future, _end.future]);
+      timer.cancel();
+    }
+    return active;
+  }
+
   Future<void> _sendTcp(
     InternetAddress local,
     InternetAddress peer,
     IpFamily family,
   ) async {
-    // Small fixed retries allow the second device to prepare its listeners.
-    for (
-      var sequence = 0;
-      sequence < session.plan.packetCount && active;
-      sequence++
-    ) {
+    final offsets = attemptOffsets(session.plan, peerReady: _peerReady);
+    for (var sequence = 0; sequence < offsets.length; sequence++) {
+      if (!await _waitUntil(offsets[sequence])) return;
       Socket? socket;
       try {
         socket = await Socket.connect(
@@ -671,33 +786,37 @@ class ProbeEngine {
           sourceAddress: local,
           timeout: const Duration(milliseconds: 800),
         );
-        if (!active) {
-          socket.destroy();
-          return;
-        }
+        if (!active) return;
         _connections.add(socket);
+        // The transport connection is a real observation, but only a valid
+        // authenticated reply identifies the expected participant.
         _record(
           ObservationKind.connected,
           CheckKind.tcp,
           family,
           sequence: sequence,
         );
-        socket.add([
-          ..._packet(CheckKind.tcp, family, sequence).encode(session.secret),
-          10,
-        ]);
-        await socket.flush().timeout(const Duration(milliseconds: 800));
-        final reply = ProbePacket.decode(await _readPacket(socket), session);
-        if (active && reply?.ack == true) {
+        final problem = await _exchangeTcp(socket, family, sequence);
+        if (!active) return;
+        if (problem == null) {
           _record(
             ObservationKind.acknowledged,
             CheckKind.tcp,
             family,
             sequence: sequence,
           );
+          return;
         }
-        return;
+        _record(
+          ObservationKind.error,
+          CheckKind.tcp,
+          family,
+          sequence: sequence,
+          code: problem,
+          terminal: false,
+        );
       } catch (e) {
+        if (!active) return;
         if (e is SocketException &&
             [1, 13, 10013].contains(e.osError?.errorCode)) {
           _record(
@@ -708,17 +827,54 @@ class ProbeEngine {
           );
           return;
         }
-        // Connection refusal/timeouts describe only this attempt. Final
-        // timeout is recorded at the end of the bounded observation window.
+        // Each failed attempt keeps its own cause. Refusal, timeout and other
+        // errors are not final: a later attempt may still confirm the peer.
+        _record(
+          ObservationKind.error,
+          CheckKind.tcp,
+          family,
+          sequence: sequence,
+          code: connectErrorCode(e),
+          terminal: false,
+        );
       } finally {
         if (socket != null) {
           _connections.remove(socket);
           socket.destroy();
         }
       }
-      await Future<void>.delayed(
-        Duration(milliseconds: session.plan.intervalMs),
-      );
+    }
+  }
+
+  /// Sends the probe on an established connection. Returns `null` when the
+  /// reply is an authenticated acknowledgement bound to this session, run,
+  /// sender, receiver, check, family and sequence; otherwise a problem code.
+  Future<String?> _exchangeTcp(
+    Socket socket,
+    IpFamily family,
+    int sequence,
+  ) async {
+    try {
+      socket.add([
+        ..._packet(CheckKind.tcp, family, sequence).encode(session.secret),
+        10,
+      ]);
+      await socket.flush().timeout(const Duration(milliseconds: 800));
+      final reply = ProbePacket.decode(await _readPacket(socket), session);
+      if (reply != null &&
+          reply.ack &&
+          reply.check == CheckKind.tcp &&
+          reply.family == family &&
+          reply.sequence == sequence) {
+        return null;
+      }
+      return 'tcp_reply_invalid';
+    } on _ReplyProblem catch (e) {
+      return e.code;
+    } on TimeoutException {
+      return 'tcp_reply_missing';
+    } on SocketException {
+      return 'tcp_reply_missing';
     }
   }
 
@@ -730,18 +886,18 @@ class ProbeEngine {
       while (true) {
         final remaining = const Duration(milliseconds: 800) - clock.elapsed;
         if (remaining <= Duration.zero) {
-          throw TimeoutException('Probe deadline exceeded.');
+          throw const _ReplyProblem('tcp_reply_missing');
         }
         if (!await iterator.moveNext().timeout(remaining)) break;
         for (final byte in iterator.current) {
           if (byte == 10) return bytes;
           if (bytes.length >= maxPacketBytes) {
-            throw const FormatException('Packet too large.');
+            throw const _ReplyProblem('tcp_reply_invalid');
           }
           bytes.add(byte);
         }
       }
-      throw const FormatException('Incomplete packet.');
+      throw const _ReplyProblem('tcp_reply_missing');
     } finally {
       await iterator.cancel();
     }
@@ -754,15 +910,13 @@ class ProbeEngine {
     CheckKind check,
     IpFamily family,
   ) async {
-    for (
-      var sequence = 0;
-      sequence < session.plan.packetCount && active;
-      sequence++
-    ) {
-      await Future<void>.delayed(
-        Duration(milliseconds: session.plan.intervalMs),
-      );
-      if (!active) break;
+    final offsets = attemptOffsets(
+      session.plan,
+      peerReady: _peerReady,
+      leadIn: true,
+    );
+    for (var sequence = 0; sequence < offsets.length; sequence++) {
+      if (!await _waitUntil(offsets[sequence])) break;
       try {
         final bytes = _packet(check, family, sequence).encode(session.secret);
         if (socket.send(bytes, destination, port) == bytes.length) {
@@ -789,6 +943,71 @@ class ProbeEngine {
     }
   }
 
+  /// Attributes a native DNS-SD error to the operation that failed.
+  ///
+  /// A direction passes when the target resolves the source's service, so a
+  /// failed publication affects local to peer, and a failed browse affects peer
+  /// to local. A failed resolution is attributed only when it names the peer's
+  /// service; otherwise it is kept without a direction.
+  void _recordDiscoveryError(Map<String, dynamic> event) {
+    final code = event['code'];
+    if (code == 'permissionDenied' || code == 'permission_denied') {
+      _both(
+        ObservationKind.permissionDenied,
+        CheckKind.dnsSd,
+        IpFamily.system,
+        code: 'discovery_permission_denied',
+      );
+      return;
+    }
+    switch (code) {
+      case 'dns_sd_publish':
+        _record(
+          ObservationKind.error,
+          CheckKind.dnsSd,
+          IpFamily.system,
+          code: 'dns_sd_publish_failed',
+        );
+      case 'dns_sd_browse':
+        _record(
+          ObservationKind.error,
+          CheckKind.dnsSd,
+          IpFamily.system,
+          incoming: true,
+          code: 'dns_sd_browse_failed',
+        );
+      case 'dns_sd_resolve' when _namesPeerService(event['name']):
+        _record(
+          ObservationKind.error,
+          CheckKind.dnsSd,
+          IpFamily.system,
+          incoming: true,
+          code: 'dns_sd_resolve_failed',
+        );
+      default:
+        _record(
+          ObservationKind.error,
+          CheckKind.dnsSd,
+          IpFamily.system,
+          code: code == 'dns_sd_resolve'
+              ? 'dns_sd_resolve_unattributed'
+              : 'dns_sd_error_unattributed',
+          terminal: false,
+          unattributed: true,
+        );
+    }
+  }
+
+  /// Native service names are `LP-<session prefix>-<device prefix>`.
+  bool _namesPeerService(Object? name) {
+    if (name is! String) return false;
+    final prefix =
+        'LP-${session.sessionId.substring(0, min(16, session.sessionId.length))}-';
+    if (!name.startsWith(prefix)) return false;
+    final device = name.substring(prefix.length);
+    return device.isNotEmpty && session.peer.id.startsWith(device);
+  }
+
   Future<void> _setupDiscovery() async {
     if (capabilities['discovery'] != true) {
       _record(
@@ -808,15 +1027,7 @@ class ProbeEngine {
             return;
           }
           if (event['type'] == 'error') {
-            _record(
-              (event['code'] == 'permissionDenied' ||
-                      event['code'] == 'permission_denied')
-                  ? ObservationKind.permissionDenied
-                  : ObservationKind.error,
-              CheckKind.dnsSd,
-              IpFamily.system,
-              code: 'discovery_operation_failed',
-            );
+            _recordDiscoveryError(event);
             return;
           }
           if (event['type'] == 'published') {
@@ -878,6 +1089,20 @@ class ProbeEngine {
 
 bool _sameAddress(InternetAddress a, InternetAddress b) =>
     a.address.split('%').first == b.address.split('%').first;
+
+/// Compares parsed addresses (not text forms) and ports, so loopback tests
+/// with distinct ports and several interfaces are not confused.
+bool _isSameEndpoint(
+  InternetAddress a,
+  int aPort,
+  InternetAddress b,
+  int bPort,
+) =>
+    aPort == bPort &&
+    a.type == b.type &&
+    a.rawAddress.length == b.rawAddress.length &&
+    Iterable.generate(a.rawAddress.length)
+        .every((i) => a.rawAddress[i] == b.rawAddress[i]);
 ObservationKind _errorKind(Object error) =>
     error is SocketException &&
         [1, 13, 10013].contains(error.osError?.errorCode)

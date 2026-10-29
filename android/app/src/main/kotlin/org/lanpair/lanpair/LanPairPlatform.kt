@@ -204,7 +204,7 @@ class LanPairPlatform(private val activity: Activity, messenger: BinaryMessenger
                     if (token != generation) return@post
                     activeResolution = null
                     resolving = false
-                    event(mapOf("type" to "error", "code" to "dns_sd_resolve", "nativeCode" to code)); resolveNext(token)
+                    event(mapOf("type" to "error", "code" to "dns_sd_resolve", "name" to service.serviceName, "nativeCode" to code)); resolveNext(token)
                 }
             }
             override fun onServiceResolved(service: NsdServiceInfo) {

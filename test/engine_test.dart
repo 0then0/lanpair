@@ -1,83 +1,13 @@
-import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lanpair/src/control.dart';
 import 'package:lanpair/src/engine.dart';
-import 'package:lanpair/src/identity.dart';
 import 'package:lanpair/src/model.dart';
-import 'package:lanpair/src/platform_bridge.dart';
 import 'package:lanpair/src/report.dart';
 
-class LocalPlatform extends PlatformBridge {
-  @override
-  Stream<Map<String, dynamic>> get events => const Stream.empty();
-  @override
-  Future<void> stopDiscovery() async {}
-  @override
-  Future<void> acquireMulticast() async {}
-  @override
-  Future<void> releaseMulticast() async {}
-}
-
-const caps = <String, dynamic>{
-  'permission': 'notRequired',
-  'rawMulticast': false,
-  'discovery': false,
-};
-Future<int> freePort() async {
-  final socket = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
-  final port = socket.port;
-  await socket.close();
-  return port;
-}
-
-Future<Session> pair() async {
-  final ports = <int>{};
-  while (ports.length < 6) {
-    ports.add(await freePort());
-  }
-  final p = ports.toList();
-  final identities = await Future.wait([createIdentity(), createIdentity()]);
-  return Session.create(
-    a: DeviceEndpoint(
-      id: randomId(),
-      address: '127.0.0.1',
-      tcpPort: p[0],
-      udpPort: p[1],
-      controlPort: p[2],
-    ),
-    b: DeviceEndpoint(
-      id: randomId(),
-      address: '127.0.0.1',
-      tcpPort: p[3],
-      udpPort: p[4],
-      controlPort: p[5],
-    ),
-    aIdentity: identities[0],
-    bIdentity: identities[1],
-    plan: const RunPlan(durationMs: 1200, intervalMs: 100),
-  );
-}
-
-ProbeEngine engine(
-  Session session, {
-  bool loseAck = false,
-  Map<String, dynamic> capabilities = caps,
-}) => ProbeEngine(
-  session: session,
-  platform: LocalPlatform(),
-  capabilities: capabilities,
-  dropAcknowledgements: loseAck,
-);
-CheckResult result(RunReport report, CheckKind kind, String from) =>
-    interpret(report).firstWhere(
-      (r) =>
-          r.check == kind &&
-          r.family == IpFamily.ipv4 &&
-          r.fromDeviceId == from,
-    );
+import 'support.dart';
 
 void main() {
   test('authenticated packet rejects corruption, foreign run, own multicast and bounds', () async {
@@ -160,6 +90,7 @@ void main() {
         );
         second = engine(b).run();
         await Future<void>.delayed(const Duration(milliseconds: 30));
+        return true;
       },
     );
     final merged = ReportCodec.merge(reportA, await second!);
@@ -191,10 +122,24 @@ void main() {
       final a = await pair();
       final b = Session.fromInvitation(a.invitation())
           .withEndpoint(DeviceRole.a, a.a.copyWith(tcpPort: await freePort()));
-      final reports = await Future.wait([engine(a).run(), engine(b).run()]);
+      // The control channel confirmed both listeners before sending.
+      final reports = await Future.wait([
+        ProbeEngine(
+          session: a,
+          platform: LocalPlatform(),
+          capabilities: caps,
+        ).run(onReady: () async => true),
+        ProbeEngine(
+          session: b,
+          platform: LocalPlatform(),
+          capabilities: caps,
+        ).run(onReady: () async => true),
+      ]);
       final merged = ReportCodec.merge(reports[0], reports[1]);
       expect(result(merged, CheckKind.tcp, a.a.id).outcome, Outcome.passed);
-      expect(result(merged, CheckKind.tcp, a.b.id).outcome, Outcome.failed);
+      final broken = result(merged, CheckKind.tcp, a.b.id);
+      expect(broken.outcome, Outcome.failed);
+      expect(broken.reason, 'connection_refused');
     },
   );
   test(
@@ -234,7 +179,10 @@ void main() {
     final merged = ReportCodec.merge(exportedA, exportedB);
     expect(merged.sourceDeviceIds, hasLength(2));
     for (final id in [a.a.id, a.b.id]) {
-      expect(result(merged, CheckKind.tcp, id).outcome, Outcome.failed);
+      // Nothing proves the peer was ever running: not a network failure.
+      final tcp = result(merged, CheckKind.tcp, id);
+      expect(tcp.outcome, Outcome.inconclusive);
+      expect(tcp.reason, 'peer_not_listening');
       expect(result(merged, CheckKind.udp, id).outcome, Outcome.inconclusive);
     }
     expect(

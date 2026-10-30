@@ -8,6 +8,7 @@
 - DNS-SD publication, browse and resolution errors are separate and attached to the direction they affect; an error whose direction cannot be established is kept without a direction.
 - Control channel: returning to the foreground, overlapping lifecycle changes and new sessions no longer leave a second listener bound, and an earlier open failure no longer remains the current state.
 - Reports: format versions stay 1. Interpretation envelope version 2; 0.1.0 journals remain importable and are reinterpreted with the new rules (see docs/protocol.md). New readable explanations in all seven languages.
+- QR invitation: shown in a wide dialog sized to the window (up to 640 px) instead of a fixed 300 px box squeezed by the narrow adaptive alert, so modules are large enough to scan on a laptop screen.
 - Android: the release packaging step names an APK `lanpair-android.apk` only when it carries a signature, warns when it does not, and no longer picks a stale unsigned file next to a signed one. Documentation states that an unsigned APK cannot be installed and lists installation requirements. Version code 2.
 
 ## 0.1.0 (unreleased)

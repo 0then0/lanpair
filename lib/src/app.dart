@@ -1370,44 +1370,63 @@ class _WorkspaceState extends State<_Workspace> {
   Future<void> _showQr() async {
     final value = c.invitation!;
     final fits = utf8.encode(value).length <= 2800;
-    await showAdaptiveDialog<void>(
+    // A dense invitation needs as many pixels per module as the screen allows,
+    // so the code gets a wide dialog instead of the narrow adaptive alert.
+    await showDialog<void>(
       context: context,
-      builder: (context) => AlertDialog.adaptive(
-        title: Text(s.showQr),
-        scrollable: true,
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (fits)
-              Semantics(
-                label: s.invitationLabel,
-                child: Container(
-                  color: Colors.white,
-                  padding: const EdgeInsets.all(12),
-                  child: SizedBox(
-                    width: 300,
-                    height: 300,
-                    child: QrImageView(
-                      data: value,
-                      backgroundColor: Colors.white,
-                      errorCorrectionLevel: QrErrorCorrectLevel.L,
+      builder: (context) {
+        final screen = MediaQuery.sizeOf(context);
+        final side = (screen.shortestSide - 200).clamp(240.0, 640.0);
+        return Dialog(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxWidth: side + 80),
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    s.showQr,
+                    style: Theme.of(context).textTheme.titleLarge,
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 16),
+                  if (fits)
+                    Semantics(
+                      label: s.invitationLabel,
+                      child: Center(
+                        child: Container(
+                          color: Colors.white,
+                          padding: const EdgeInsets.all(16),
+                          child: QrImageView(
+                            data: value,
+                            size: side,
+                            padding: EdgeInsets.zero,
+                            backgroundColor: Colors.white,
+                            errorCorrectionLevel: QrErrorCorrectLevel.L,
+                          ),
+                        ),
+                      ),
+                    )
+                  else
+                    Text(s.qrUnavailable),
+                  const SizedBox(height: 16),
+                  Text(s.invitationPrivacy, textAlign: TextAlign.center),
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: Text(s.close),
                     ),
                   ),
-                ),
-              )
-            else
-              Text(s.qrUnavailable),
-            const SizedBox(height: 16),
-            Text(s.invitationPrivacy),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text(s.close),
+                ],
+              ),
+            ),
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 

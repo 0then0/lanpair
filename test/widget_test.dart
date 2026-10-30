@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import 'package:lanpair/l10n/generated/app_localizations.dart';
 import 'package:lanpair/src/app.dart';
 import 'package:lanpair/src/ui_contract.dart';
@@ -453,6 +454,31 @@ void main() {
       TargetPlatform.macOS,
     }),
   );
+
+  testWidgets('the QR code is large on desktop screens and fits small ones', (
+    tester,
+  ) async {
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    tester.view.devicePixelRatio = 1;
+    // A 13 inch laptop window, then a narrow (tall, to avoid scrolling) phone.
+    for (final (size, atLeast, atMost) in [
+      (const Size(1440, 900), 400.0, 640.0),
+      (const Size(390, 2400), 190.0, 250.0),
+    ]) {
+      tester.view.physicalSize = size;
+      final controller = FakeController()..complete();
+      await tester.pumpWidget(LanPairApp(controller: controller));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Show QR code'));
+      await tester.pumpAndSettle();
+      final side = tester.getSize(find.byType(QrImageView)).width;
+      expect(side, inInclusiveRange(atLeast, atMost), reason: '$size');
+      expect(tester.takeException(), isNull);
+      await tester.tap(find.text('Close'));
+      await tester.pumpAndSettle();
+    }
+  });
 
   testWidgets('archived results identify the journal source', (tester) async {
     tester.view.physicalSize = const Size(1200, 1000);

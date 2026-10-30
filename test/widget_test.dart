@@ -480,6 +480,30 @@ void main() {
     }
   });
 
+  testWidgets('the QR dialog closes with Escape and with a click outside', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1440, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      LanPairApp(controller: FakeController()..complete()),
+    );
+    await tester.pumpAndSettle();
+    for (final close in <Future<void> Function()>[
+      () => tester.sendKeyEvent(LogicalKeyboardKey.escape),
+      () => tester.tapAt(const Offset(10, 10)),
+    ]) {
+      await tester.tap(find.text('Show QR code'));
+      await tester.pumpAndSettle();
+      expect(find.byType(QrImageView), findsOneWidget);
+      await close();
+      await tester.pumpAndSettle();
+      expect(find.byType(QrImageView), findsNothing);
+    }
+  });
+
   testWidgets('archived results identify the journal source', (tester) async {
     tester.view.physicalSize = const Size(1200, 1000);
     tester.view.devicePixelRatio = 1;

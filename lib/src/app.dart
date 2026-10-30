@@ -1374,6 +1374,7 @@ class _WorkspaceState extends State<_Workspace> {
     // so the code gets a wide dialog instead of the narrow adaptive alert.
     await showDialog<void>(
       context: context,
+      barrierDismissible: true,
       builder: (context) {
         final screen = MediaQuery.sizeOf(context);
         final side = (screen.shortestSide - 200).clamp(240.0, 640.0);
@@ -1417,6 +1418,7 @@ class _WorkspaceState extends State<_Workspace> {
                   Align(
                     alignment: Alignment.centerRight,
                     child: TextButton(
+                      autofocus: true,
                       onPressed: () => Navigator.pop(context),
                       child: Text(s.close),
                     ),

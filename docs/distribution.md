@@ -45,7 +45,7 @@ python3 tool/package_release.py macos
 python3 tool/package_release.py android
 ```
 
-Run only the command matching the build you produced. The script writes the package and a SHA-256 checksum file to `dist/`, and fails if the expected native bundle is missing. Packages include all required runtime files; a desktop executable by itself is insufficient without its libraries and data directory.
+Run only the command matching the build you produced. The script writes the package and a SHA-256 checksum file to `dist/`, and fails if the expected native bundle is missing. On macOS it writes `lanpair-macos-unsigned.tar.gz` and `lanpair-macos-unsigned.dmg`, each with its checksum. The disk image holds `LANPair.app` and an `Applications` link; it needs `hdiutil` and is created on macOS only. Like the archive it is neither signed nor notarized, so Gatekeeper may ask for confirmation on first open. Copy the app to `/Applications` before running it: the window position and the saved settings belong to the app, not to the folder it was unpacked into. Packages include all required runtime files; a desktop executable by itself is insufficient without its libraries and data directory.
 
 Linux and Windows CI packages target x64. macOS architecture follows the Flutter/native runner configuration; inspect the binary with `file` before advertising supported architectures. Unsigned or ad hoc-signed artifacts may be blocked by OS policy.
 
@@ -83,7 +83,7 @@ Inspect the final APK's manifest and signature, install it on a test device and 
 
 ### Installing on Android
 
-- Package `org.lanpair.lanpair`; minimum Android 7.0 (API 24, the pinned Flutter SDK's default), target and compile API 37 (Android 17). Version name and code come from `pubspec.yaml`: `0.1.1+2` is name 0.1.1, code 2.
+- Package `org.lanpair.lanpair`; minimum Android 7.0 (API 24, the pinned Flutter SDK's default), target and compile API 37 (Android 17). Version name and code come from `pubspec.yaml`: `0.1.2+3` is name 0.1.2, code 3.
 - `flutter build apk --release` makes one universal APK (about 66 MB) with `arm64-v8a`, `armeabi-v7a` and `x86_64` libraries. No app bundle, ABI split or ABI filter is configured. The 64-bit libraries of the checked 0.1.0 APK are stored uncompressed, 16 KB aligned, with 16 KB or larger ELF segment alignment.
 - **An unsigned APK is not installable.** Android requires every APK to carry a signature before it is installed or updated ([app signing](https://developer.android.com/studio/publish/app-signing)). The CI artifact `lanpair-android-unsigned` and `dist/lanpair-android-unsigned.apk` are unsigned by design: no key is configured in the repository or workflow. The installer refuses it on every Android version; the wording of the message varies by device. Sign it with your own key, as described above, before giving it to anyone. A throwaway or debug key is acceptable for one-off testing only: a later release signed with another key cannot update it.
 - **Updating** an installed copy requires the same signing certificate and a version code that is not lower than the installed one (increase the number after `+` in `pubspec.yaml` for every APK you distribute). A different key makes the installer refuse the update; uninstalling first removes the app's saved report history.
@@ -134,6 +134,6 @@ Raw multicast remains disabled unless an approved provisioning profile contains 
 
 ## Packaging workflow
 
-The manually dispatched [Release packages workflow](../.github/workflows/packages.yml) builds native desktop bundles and an unsigned Android APK, packages them with SHA-256 checksums and uploads workflow artifacts. It does not publish a GitHub release, create a tag, notarize, or submit to a store. iOS signing remains a separate owner-controlled step.
+The manually dispatched [Release packages workflow](../.github/workflows/packages.yml) builds native desktop bundles (a tar.gz and a DMG on macOS) and an unsigned Android APK, packages them with SHA-256 checksums and uploads workflow artifacts. It does not publish a GitHub release, create a tag, notarize, or submit to a store. iOS signing remains a separate owner-controlled step.
 
 Actions are pinned by commit. Dependabot checks supported ecosystems monthly without automatic merging. Inspect the workflow results for the exact commit before distributing its artifacts. Signing secrets, certificates and store credentials stay outside source control and public artifacts.

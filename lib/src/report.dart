@@ -405,6 +405,13 @@ class ReportCodec {
       }
       capabilities[entry.key] = entry.value;
     }
+    for (final entry in _endpointViews(a, b).entries) {
+      if (capabilities.containsKey(entry.key) &&
+          capabilities[entry.key] != entry.value) {
+        throw const FormatException('Conflicting capability statements.');
+      }
+      capabilities[entry.key] = entry.value;
+    }
     final devices = List<DeviceEndpoint>.generate(2, (index) {
       final left = a.devices[index];
       final right = b.devices[index];
@@ -429,6 +436,64 @@ class ReportCodec {
       sourceRuns: sources.values.toList(),
       redacted: a.redacted,
     );
+  }
+
+  /// Whether each participant's journal used the endpoint the other one
+  /// described in its own journal. The merged journal keeps one endpoint per
+  /// participant (its own statement), so the comparison is recorded as
+  /// `<viewer>.peerEndpoint`: `matches` or `differs`. A difference is allowed
+  /// (addresses are not identity) but never hidden.
+  ///
+  /// Endpoint revisions decide when both journals carry them, which also works
+  /// for redacted journals. Older journals are compared by their endpoints.
+  static Map<String, String> _endpointViews(RunReport a, RunReport b) {
+    if (a.sourceDeviceIds.length != 1 ||
+        b.sourceDeviceIds.length != 1 ||
+        a.reportingDeviceId == b.reportingDeviceId) {
+      return {};
+    }
+    String? view(RunReport viewer, RunReport owner) {
+      final held = viewer
+          .capabilities['${viewer.reportingDeviceId}.peerEndpointRevision'];
+      DeviceEndpoint endpoint(RunReport r) =>
+          r.devices.firstWhere((d) => d.id == owner.reportingDeviceId);
+      if (held == '0') {
+        // Revision 0: the viewer's address was typed in or learned from a
+        // 0.1.1 peer, so it carries no interface or index. Compare only what
+        // such an entry states: its addresses and TCP port.
+        if (viewer.redacted || owner.redacted) return null;
+        String bare(String a) => a.split('%').first;
+        Set<String> addresses(DeviceEndpoint e) => {
+          e.address,
+          if (e.ipv6Address != null) e.ipv6Address!,
+        }.where((a) => a.isNotEmpty).map(bare).toSet();
+        final used = endpoint(viewer);
+        final own = endpoint(owner);
+        return addresses(own).containsAll(addresses(used)) &&
+                used.tcpPort == own.tcpPort
+            ? 'matches'
+            : 'differs';
+      }
+      final ownRevision =
+          owner.capabilities['${owner.reportingDeviceId}.endpointRevision'];
+      if (held != null && ownRevision != null) {
+        return held == ownRevision ? 'matches' : 'differs';
+      }
+      if (viewer.redacted || owner.redacted) return null;
+      return jsonEncode(endpoint(viewer).toJson()) ==
+              jsonEncode(endpoint(owner).toJson())
+          ? 'matches'
+          : 'differs';
+    }
+
+    final result = <String, String>{};
+    for (final (viewer, owner) in [(a, b), (b, a)]) {
+      final value = view(viewer, owner);
+      if (value != null) {
+        result['${viewer.reportingDeviceId}.peerEndpoint'] = value;
+      }
+    }
+    return result;
   }
 
   /// Removes addresses, interface names and wall-clock timestamps. Stable IDs keep
@@ -477,6 +542,8 @@ class ReportCodec {
       'notDetermined',
       'restricted',
       'redacted',
+      'matches',
+      'differs',
     };
     return RunReport(
       sessionId: report.sessionId,
@@ -485,8 +552,15 @@ class ReportCodec {
       devices: devices,
       parameters: report.parameters,
       capabilities: report.capabilities.map(
-        (key, value) =>
-            MapEntry(key, categorical.contains(value) ? value : 'redacted'),
+        (key, value) => MapEntry(
+          key,
+          // Revisions are counters, not network identifiers.
+          categorical.contains(value) ||
+                  key.endsWith('ndpointRevision') &&
+                      RegExp(r'^\d{1,10}$').hasMatch(value)
+              ? value
+              : 'redacted',
+        ),
       ),
       observations: report.observations
           .map(

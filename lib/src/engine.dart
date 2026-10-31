@@ -158,11 +158,17 @@ class ProbeEngine {
     required this.capabilities,
     this.onProgress,
     this.dropAcknowledgements = false,
+    this.endpointRevisions,
   });
   final Session session;
   final PlatformBridge platform;
   final Map<String, dynamic> capabilities;
   final void Function(double progress)? onProgress;
+
+  /// Revisions of this device's endpoint and of the peer endpoint it holds, as
+  /// they were when the run began (see [EndpointStamp]). They are recorded in
+  /// the journal beside the endpoints the probes actually used.
+  final EndpointStamp? endpointRevisions;
 
   /// Test seam, never enabled by the application.
   final bool dropAcknowledgements;
@@ -275,6 +281,12 @@ class ProbeEngine {
       '${session.local.id}.discovery': capabilities['discovery'] == true
           ? 'available'
           : 'unsupported',
+      if (endpointRevisions != null) ...{
+        '${session.local.id}.endpointRevision':
+            '${endpointRevisions!.revision}',
+        '${session.local.id}.peerEndpointRevision':
+            '${endpointRevisions!.peerRevision}',
+      },
     },
     observations: observations,
     startedAt: _started!,

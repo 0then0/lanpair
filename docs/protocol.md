@@ -40,7 +40,61 @@ An empty peer address means that the peer endpoint has not yet been entered.
 This is an inconclusive setup condition, not evidence of a network fault.
 Endpoint corrections preserve the session, run and participant IDs. Imported
 remote IPv6 zone names do not identify an interface on the local OS. Link-local
-destinations must use the selected local interface's scope identifier.
+destinations must use the selected local interface's scope identifier. An
+interface name or index describes the device that reported it; the other
+participant keeps it as metadata and never uses it as a local scope.
+
+### Endpoint synchronization (0.1.2)
+
+An invitation fixes A's endpoint at the moment it was created, and a participant
+can change its interface afterwards. The control channel therefore exchanges
+endpoints again whenever one changes. The wire format stays version 1.
+
+- Each participant numbers its own endpoint from 1 and increases the number with
+  every change of its addresses, interface or ports. A new session, or a new
+  join of the same invitation, starts again at 1. A revision identifies one set
+  of parameters of one participant.
+- `/endpoint` carries the sender's endpoint, its `revision` and `peerRevision`,
+  the revision of the receiver's endpoint the sender currently holds (0 for
+  none). The receiver stores a newer endpoint, ignores an identical resend and
+  refuses an older or conflicting one (`stale_revision`, `revision_conflict`).
+  `/endpoint` also carries a `generation`, a microsecond timestamp taken when
+  the sender joined or created the session. A larger generation than the
+  receiver holds is a later join: numbering restarts and acknowledgements given
+  to the earlier join no longer count. A smaller one is a late message of an
+  earlier join and is refused (`stale_revision`) whatever its revision. The
+  answer carries the receiver's generation as well. A receiver that is running or has finished
+  answers `applied: false` (`peer_running`, `peer_completed`).
+- The answer carries the receiver's own endpoint and revision, so one exchange
+  updates both sides, and `appliedRevision`, the sender's revision the receiver
+  now holds. A participant counts its endpoint as confirmed only when the peer
+  answered `applied: true` with that revision, or itself stated
+  `peerRevision` equal to it. When the stated revision of a request is older
+  than the receiver's, the receiver sends its own endpoint once per revision.
+  No answer triggers another request, so an exchange ends after at most two
+  round trips; the sender tries at most twice, only after a transport failure.
+- `/start` carries `revision` and `peerRevision`. The receiver answers
+  `{"verified": true}` only when both match the endpoints it holds, and refuses
+  with 409 when they do not, so the session's single run is not spent on
+  parameters one side never held. `peerReadiness: confirmed` requires this
+  verification.
+- A participant that cannot confirm the current endpoints stays usable:
+  readiness is `unconfirmed` with a reason (`control_unreachable`,
+  `control_unavailable`, `interface_unavailable`, `peer_rejected`, `peer_running`, `peer_completed`,
+  `peer_legacy`, `manual_peer`), and the run may start independently.
+- A confirmation belongs to the revisions it was given for. A change makes the
+  state pending until the peer answers again; an older handshake never confirms
+  a newer endpoint. Messages of an earlier session, or of a replaced listener,
+  change nothing.
+- 0.1.1 peers have no `/endpoint` (404). The sender then uses `/hello`, which
+  delivers its endpoint and returns the peer's, but nothing proves the peer
+  applied it: the state is `peer_legacy` and `unconfirmed`. A 0.1.1 sender's
+  `/hello` or `/start` is accepted the same way. A missing field is never read
+  as confirmation.
+- When two participants change interface at the same moment each can only reach
+  the other's previous address, so both stay `unconfirmed`. Importing the other
+  device's current invitation again starts a new exchange from its current
+  address.
 
 The default plan is 6000 ms, three packets per check/family and 250 ms between
 packets. Accepted plans permit 1000–15000 ms, one to three packets and
@@ -58,9 +112,11 @@ and one participant's stopwatch is never compared with the other's.
 Each journal records `<participant>.peerReadiness` among its capabilities:
 
 - `confirmed`: the control channel showed that the peer's listeners were open
-  before this participant sent anything. The initiator's `/start` request was
-  accepted, or the peer's authenticated `/start` request started this run.
-  The attempts then follow each other at the plan's interval.
+  before this participant sent anything, and that both participants held each
+  other's current endpoint (see "Endpoint synchronization"). The initiator's
+  `/start` request was accepted and verified, or the peer's authenticated and
+  verified `/start` request started this run. The attempts then follow each
+  other at the plan's interval.
 - `unconfirmed`: the run was started independently, or the control channel
   failed. Journals written before 0.1.1 contain no statement and are treated
   as `unconfirmed`.
@@ -97,14 +153,18 @@ The certificate pin and bearer secret are never written to reports.
 Each POST includes `protocolVersion`, `sessionId` and `runId`. Supported paths:
 
 - `/hello` exchanges the joining participant's endpoint and returns the host
-  endpoint. Participant IDs cannot be replaced by an endpoint update.
+  endpoint (the 0.1.1 handshake, still accepted but never a confirmation).
+  Participant IDs cannot be replaced by an endpoint update.
+- `/endpoint` updates the peer's endpoint under a revision and returns the
+  receiver's own; see "Endpoint synchronization".
 - `/start` requests the one accepted bounded run. Repeated starts do not
   allocate another experiment.
 - `/report` transfers a public report, validated using the same strict rules
   as a manually imported file.
 
 Control traffic has finite message sizes, timeouts and concurrency/request
-budgets. Unauthenticated requests do not consume the accepted session's request
+budgets (64 authenticated requests per listener, plus a separate budget of 512
+for `/endpoint`). Unauthenticated requests do not consume the accepted session's request
 budget. A failed control exchange does not invalidate locally collected
 observations or prevent manual report export and merging.
 
@@ -289,6 +349,24 @@ reason code, and the observation IDs used as evidence. Import recomputes these
 results from the raw observations and rejects inconsistent cached conclusions.
 Raw participant messages may omit this envelope; the receiver still computes its
 own interpretation. The envelope contains no localized text or credentials.
+
+## Endpoint statements in journals
+
+A journal's `devices` list holds the endpoints the participant's probes used:
+its own endpoint and the peer endpoint it held when the run began. Later changes
+never rewrite it. Journals written by 0.1.2 also state, per participant,
+`<participant>.endpointRevision` and `<participant>.peerEndpointRevision`
+(counters, kept when redacted).
+
+Merging two single-participant journals keeps each participant's own statement
+of its endpoint and records whether the other journal used the same one:
+`<viewer>.peerEndpoint` is `matches` or `differs`. Equal revisions decide when
+both journals state them. A peer revision of 0 (an address typed in by the user
+or learned from a 0.1.1 peer) is compared by addresses and TCP port only.
+Otherwise the endpoints are compared; redacted
+journals without revisions make no statement. A difference is allowed, because
+an address is not identity, and is shown with the report. Journals of another
+session, run, plan or participant order are still refused.
 
 ## Compatibility with LANPair 0.1.0 journals
 

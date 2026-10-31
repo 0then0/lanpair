@@ -3,8 +3,10 @@
 
 import hashlib
 import shutil
+import subprocess
 import sys
 import tarfile
+import tempfile
 import zipfile
 from pathlib import Path
 
@@ -29,6 +31,49 @@ def apk_is_signed(path):
     return data[central_directory - 16 : central_directory] == b"APK Sig Block 42"
 
 
+def make_dmg(bundle, destination):
+    """Create a compressed disk image holding the app and an Applications link.
+
+    The image is unsigned and not notarized, like the archive. `ditto` keeps
+    symbolic links, extended attributes and any code signature intact.
+    """
+    if sys.platform != "darwin" or shutil.which("hdiutil") is None:
+        raise SystemExit("A DMG can only be created on macOS (hdiutil).")
+    with tempfile.TemporaryDirectory() as staging:
+        stage = Path(staging)
+        subprocess.run(["ditto", str(bundle), str(stage / bundle.name)], check=True)
+        (stage / "Applications").symlink_to("/Applications")
+        destination.unlink(missing_ok=True)
+        subprocess.run(
+            [
+                "hdiutil",
+                "create",
+                "-volname",
+                "LANPair",
+                "-srcfolder",
+                str(stage),
+                "-fs",
+                "HFS+",
+                "-format",
+                "UDZO",
+                "-ov",
+                str(destination),
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+        )
+
+
+def write_checksum(archive):
+    hasher = hashlib.sha256()
+    with archive.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            hasher.update(chunk)
+    (archive.parent / (archive.name + ".sha256")).write_text(
+        f"{hasher.hexdigest()}  {archive.name}\n"
+    )
+
+
 root = Path(__file__).resolve().parents[1]
 target = sys.argv[1]
 out = root / "dist"
@@ -40,6 +85,7 @@ if target == "linux":
         raise SystemExit(f"Missing bundle: {bundle}")
     with tarfile.open(archive, "w:gz") as result:
         result.add(bundle, arcname="lanpair")
+    packages = [archive]
 elif target == "windows":
     bundle = root / "build/windows/x64/runner/Release"
     archive = out / "lanpair-windows-x64.zip"
@@ -49,6 +95,7 @@ elif target == "windows":
         for path in sorted(bundle.rglob("*")):
             if path.is_file():
                 result.write(path, Path("lanpair") / path.relative_to(bundle))
+    packages = [archive]
 elif target == "macos":
     bundle = root / "build/macos/Build/Products/Release/LANPair.app"
     archive = out / "lanpair-macos-unsigned.tar.gz"
@@ -56,6 +103,9 @@ elif target == "macos":
         raise SystemExit(f"Missing bundle: {bundle}")
     with tarfile.open(archive, "w:gz") as result:
         result.add(bundle, arcname="LANPair.app")
+    image = out / "lanpair-macos-unsigned.dmg"
+    make_dmg(bundle, image)
+    packages = [archive, image]
 elif target == "android":
     # `flutter build apk --release` reports this file. Searching the whole
     # output tree could pick up an older unsigned build next to a signed one.
@@ -75,6 +125,7 @@ elif target == "android":
         "lanpair-android.apk" if signed else "lanpair-android-unsigned.apk"
     )
     shutil.copyfile(source, archive)
+    packages = [archive]
     if not signed:
         print(
             "WARNING: this APK carries no signature. Android refuses to install an "
@@ -84,10 +135,6 @@ elif target == "android":
         )
 else:
     raise SystemExit("Expected linux, windows, macos or android.")
-hasher = hashlib.sha256()
-with archive.open("rb") as source:
-    for chunk in iter(lambda: source.read(1024 * 1024), b""):
-        hasher.update(chunk)
-digest = hasher.hexdigest()
-(archive.parent / (archive.name + ".sha256")).write_text(f"{digest}  {archive.name}\n")
-print(archive)
+for package in packages:
+    write_checksum(package)
+    print(package)

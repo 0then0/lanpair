@@ -9,6 +9,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
+import 'preferences.dart';
 import 'qr_decode.dart';
 
 import 'package:qr_flutter/qr_flutter.dart';
@@ -20,17 +21,20 @@ import 'ui_theme.dart';
 /// The same diagnostic model is presented with platform-specific navigation,
 /// input conventions and controls. No network assertion is inferred by the UI.
 class LanPairApp extends StatefulWidget {
-  const LanPairApp({super.key, required this.controller});
+  const LanPairApp({super.key, required this.controller, this.preferences});
 
   final LanPairController controller;
+
+  /// Where the theme and language persist; without it they last one run.
+  final AppPreferences? preferences;
 
   @override
   State<LanPairApp> createState() => _LanPairAppState();
 }
 
 class _LanPairAppState extends State<LanPairApp> {
-  ThemeMode _theme = ThemeMode.system;
-  Locale? _locale;
+  late ThemeMode _theme = widget.preferences?.theme ?? ThemeMode.system;
+  late Locale? _locale = localeFromTag(widget.preferences?.localeTag);
 
   @override
   Widget build(BuildContext context) => MaterialApp(
@@ -54,8 +58,22 @@ class _LanPairAppState extends State<LanPairApp> {
       controller: widget.controller,
       theme: _theme,
       locale: _locale,
-      onThemeChanged: (value) => setState(() => _theme = value),
-      onLocaleChanged: (value) => setState(() => _locale = value),
+      onThemeChanged: (value) {
+        setState(() => _theme = value);
+        widget.preferences
+          ?..theme = value
+          ..save();
+      },
+      onLocaleChanged: (value) {
+        setState(() => _locale = value);
+        widget.preferences
+          ?..localeTag = value == null
+              ? null
+              : (value.countryCode == null
+                    ? value.languageCode
+                    : '${value.languageCode}_${value.countryCode}')
+          ..save();
+      },
     ),
   );
 }
@@ -844,6 +862,14 @@ class _WorkspaceState extends State<_Workspace> {
         ),
       ] else ...[
         Text(s.runDescription),
+        if (c.peerSync != 'confirmed' && c.peerSync != 'none') ...[
+          const SizedBox(height: 16),
+          _notice(
+            Icons.warning_amber_rounded,
+            s.independentRunWarning,
+            dense: true,
+          ),
+        ],
         const SizedBox(height: 20),
         Align(
           alignment: Alignment.centerLeft,
@@ -872,6 +898,10 @@ class _WorkspaceState extends State<_Workspace> {
           c.peerJournalPresent ? Icons.link : Icons.merge_type,
           c.peerJournalPresent ? s.peerMerged : s.peerMissing,
         ),
+        if (c.endpointMismatch) ...[
+          const SizedBox(height: 12),
+          _notice(Icons.warning_amber_rounded, s.endpointMismatchNotice),
+        ],
         const SizedBox(height: 20),
         Wrap(
           spacing: 12,
@@ -1227,10 +1257,23 @@ class _WorkspaceState extends State<_Workspace> {
     'discovery' => s.discoveryCapability,
     'foreground' => s.foregroundCapability,
     'interface' => s.networkInterface,
+    'peerEndpoint' => s.peerEndpointCapability,
     _ => s.technicalCode(value),
   };
 
   String _readinessDetail(String value) => switch (value) {
+    'confirmed' => s.peerSyncConfirmed,
+    'syncing' => s.peerSyncSyncing,
+    'awaiting_peer' => s.peerSyncAwaitingPeer,
+    'endpoint_pending' => s.peerSyncPending,
+    'control_unreachable' => s.peerSyncControlUnreachable,
+    'control_unavailable' => s.peerSyncControlUnavailable,
+    'interface_unavailable' => s.peerSyncInterfaceUnavailable,
+    'peer_rejected' => s.peerSyncPeerRejected,
+    'peer_running' || 'peer_completed' => s.peerSyncPeerBusy,
+    'peer_legacy' => s.peerSyncLegacy,
+    'manual_peer' => s.peerSyncManual,
+    'stale_revision' || 'revision_conflict' => s.peerSyncStale,
     'permission_unknown' => s.permissionUnknown,
     'multicast_entitlement_missing' ||
     'ios_multicast_entitlement_missing' => s.multicastEntitlement,
@@ -1334,6 +1377,7 @@ class _WorkspaceState extends State<_Workspace> {
     'invalidAddress' => s.invalidAddress,
     'peerAddressIsLocal' => s.peerAddressIsLocal,
     'noInterface' => s.noInterfaces,
+    'interfaceUnavailable' => s.interfaceUnavailable,
     'networkChanged' => s.networkChanged,
     'sessionRequired' => s.noResultsDescription,
     'runAlreadyCompleted' => s.runOnce,
@@ -1350,6 +1394,7 @@ class _WorkspaceState extends State<_Workspace> {
     'wallClock' => s.wallClock,
     'monotonicDuration' => s.monotonicDuration,
     'sourceDevice' => s.sourceDevice,
+    'endpointParameters' => s.endpointParameters,
     _ => s.technicalCode(value),
   };
 
@@ -1441,81 +1486,61 @@ class _WorkspaceState extends State<_Workspace> {
     if (value != null) await _perform(() => c.joinSession(value));
   }
 
-  Future<void> _details(ResultView result) async {
-    await showAdaptiveDialog<void>(
-      context: context,
-      builder: (context) => AlertDialog.adaptive(
-        title: Text(s.checkDetails),
-        scrollable: true,
-        content: Material(
-          type: MaterialType.transparency,
-          child: SizedBox(
-            width: 620,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  '${_kind(result.kind)} · ${_family(result.family)}',
-                  style: Theme.of(context).textTheme.titleLarge,
-                ),
-                const SizedBox(height: 8),
-                Text(result.direction),
-                const SizedBox(height: 16),
-                _statusLabel(result.status),
-                const SizedBox(height: 24),
-                Text(
-                  s.interpretation,
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const SizedBox(height: 8),
-                Text(_reason(result.reason)),
-                const SizedBox(height: 24),
-                Text(
-                  s.rawObservations,
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const SizedBox(height: 12),
-                if (result.observations.isEmpty) Text(s.noEvidence),
-                for (final observation in result.observations) ...[
-                  const Divider(),
-                  Text(_observation(observation.code)),
-                  const SizedBox(height: 4),
-                  Text('${s.sourceDevice}: ${observation.device}'),
-                  Text(s.elapsed(observation.elapsedMs)),
-                  if (observation.wallTime != null) ...[
-                    Text(s.wallClock),
-                    SelectableText(observation.wallTime!),
-                  ],
-                  if (observation.interfaceName != null) ...[
-                    Text(s.networkInterface),
-                    SelectableText(observation.interfaceName!),
-                  ],
-                  if (observation.id != null) ...[
-                    Text(s.observationIdentifier),
-                    SelectableText(observation.id!),
-                  ],
-                  if (observation.sequence != null)
-                    Text(s.packetSequence(observation.sequence!)),
-                  if (observation.detail != null) ...[
-                    SelectableText(_detail(observation.detail!)),
-                    if (_detail(observation.detail!) !=
-                        s.technicalCode(observation.detail!))
-                      SelectableText(s.technicalCode(observation.detail!)),
-                  ],
-                ],
-              ],
-            ),
-          ),
+  Future<void> _details(ResultView result) => _showPanelDialog<void>(
+    title: s.checkDetails,
+    maxWidth: 680,
+    body: (context, _) => Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          '${_kind(result.kind)} · ${_family(result.family)}',
+          style: Theme.of(context).textTheme.titleLarge,
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text(s.close),
-          ),
+        const SizedBox(height: 8),
+        Text(result.direction),
+        const SizedBox(height: 16),
+        _statusLabel(result.status),
+        const SizedBox(height: 24),
+        Text(s.interpretation, style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 8),
+        Text(_reason(result.reason)),
+        const SizedBox(height: 24),
+        Text(s.rawObservations, style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 12),
+        if (result.observations.isEmpty) Text(s.noEvidence),
+        for (final observation in result.observations) ...[
+          const Divider(),
+          Text(_observation(observation.code)),
+          const SizedBox(height: 4),
+          Text('${s.sourceDevice}: ${observation.device}'),
+          Text(s.elapsed(observation.elapsedMs)),
+          if (observation.wallTime != null) ...[
+            Text(s.wallClock),
+            SelectableText(observation.wallTime!),
+          ],
+          if (observation.interfaceName != null) ...[
+            Text(s.networkInterface),
+            SelectableText(observation.interfaceName!),
+          ],
+          if (observation.id != null) ...[
+            Text(s.observationIdentifier),
+            SelectableText(observation.id!),
+          ],
+          if (observation.sequence != null)
+            Text(s.packetSequence(observation.sequence!)),
+          if (observation.detail != null) ...[
+            SelectableText(_detail(observation.detail!)),
+            if (_detail(observation.detail!) !=
+                s.technicalCode(observation.detail!))
+              SelectableText(s.technicalCode(observation.detail!)),
+          ],
         ],
-      ),
-    );
-  }
+      ],
+    ),
+    actions: (context) => [
+      TextButton(onPressed: () => Navigator.pop(context), child: Text(s.close)),
+    ],
+  );
 
   String _humanReport(ReportExportView report) {
     final lines = <String>[
@@ -1523,6 +1548,10 @@ class _WorkspaceState extends State<_Workspace> {
       s.sessionIdentifier(c.sessionId ?? ''),
       s.runIdentifier(c.runId ?? ''),
       c.peerJournalPresent ? s.peerMerged : s.peerMissing,
+      if (report.fields.any(
+        (f) => f.label == 'endpointParameters' && f.value == 'differs',
+      ))
+        s.endpointMismatchNotice,
       '',
       s.reportMetadata,
       for (final field in report.fields.where(
@@ -1560,80 +1589,51 @@ class _WorkspaceState extends State<_Workspace> {
   Future<void> _export() async {
     var redact = true;
     var readable = false;
-    final confirmed = await showAdaptiveDialog<bool>(
-      context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog.adaptive(
-          title: Text(s.exportTitle),
-          scrollable: true,
-          content: Material(
-            type: MaterialType.transparency,
-            child: SizedBox(
-              width: 600,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text(s.exportDescription),
-                  const SizedBox(height: 20),
-                  Text(
-                    s.addressesIncluded,
-                    style: Theme.of(context).textTheme.titleSmall,
-                  ),
-                  const SizedBox(height: 8),
-                  if (c.exportAddresses.isEmpty) Text(s.noAddresses),
-                  for (final address in c.exportAddresses)
-                    SelectableText(address),
-                  const SizedBox(height: 16),
-                  SwitchListTile.adaptive(
-                    contentPadding: EdgeInsets.zero,
-                    title: Text(s.redact),
-                    subtitle: Text(s.redactDescription),
-                    value: redact,
-                    onChanged: (value) => setDialogState(() => redact = value),
-                  ),
-                  const SizedBox(height: 16),
-                  DropdownButtonFormField<bool>(
-                    initialValue: readable,
-                    isExpanded: true,
-                    items: [
-                      DropdownMenuItem(value: false, child: Text(s.jsonReport)),
-                      DropdownMenuItem(
-                        value: true,
-                        child: Text(s.readableReport),
-                      ),
-                    ],
-                    onChanged: (value) =>
-                        setDialogState(() => readable = value!),
-                  ),
-                ],
-              ),
-            ),
+    final confirmed = await _showPanelDialog<bool>(
+      title: s.exportTitle,
+      maxWidth: 640,
+      body: (context, setDialogState) => Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(s.exportDescription),
+          const SizedBox(height: 20),
+          Text(
+            s.addressesIncluded,
+            style: Theme.of(context).textTheme.titleSmall,
           ),
-          actions: [
-            if (apple)
-              CupertinoDialogAction(
-                onPressed: () => Navigator.pop(context, false),
-                child: Text(s.cancel),
-              )
-            else
-              TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: Text(s.cancel),
-              ),
-            if (apple)
-              CupertinoDialogAction(
-                isDefaultAction: true,
-                onPressed: () => Navigator.pop(context, true),
-                child: Text(s.exportReport),
-              )
-            else
-              TextButton(
-                onPressed: () => Navigator.pop(context, true),
-                child: Text(s.exportReport),
-              ),
-          ],
-        ),
+          const SizedBox(height: 8),
+          if (c.exportAddresses.isEmpty) Text(s.noAddresses),
+          for (final address in c.exportAddresses) SelectableText(address),
+          const SizedBox(height: 16),
+          SwitchListTile.adaptive(
+            contentPadding: EdgeInsets.zero,
+            title: Text(s.redact),
+            subtitle: Text(s.redactDescription),
+            value: redact,
+            onChanged: (value) => setDialogState(() => redact = value),
+          ),
+          const SizedBox(height: 16),
+          DropdownButtonFormField<bool>(
+            initialValue: readable,
+            isExpanded: true,
+            items: [
+              DropdownMenuItem(value: false, child: Text(s.jsonReport)),
+              DropdownMenuItem(value: true, child: Text(s.readableReport)),
+            ],
+            onChanged: (value) => setDialogState(() => readable = value!),
+          ),
+        ],
       ),
+      actions: (context) => [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: Text(s.cancel),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, true),
+          child: Text(s.exportReport),
+        ),
+      ],
     );
     if (confirmed == true) {
       await _perform(
@@ -1646,95 +1646,139 @@ class _WorkspaceState extends State<_Workspace> {
     }
   }
 
-  Future<void> _settings() async {
-    await showAdaptiveDialog<void>(
-      context: context,
-      builder: (context) => AlertDialog.adaptive(
-        title: Text(s.settings),
-        scrollable: true,
-        content: Material(
-          type: MaterialType.transparency,
-          child: SizedBox(
-            width: 520,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                DropdownButtonFormField<ThemeMode>(
-                  initialValue: widget.theme,
-                  isExpanded: true,
-                  decoration: InputDecoration(labelText: s.theme),
-                  items: [
-                    DropdownMenuItem(
-                      value: ThemeMode.system,
-                      child: Text(s.systemTheme),
+  Future<void> _settings() => _showPanelDialog<void>(
+    title: s.settings,
+    maxWidth: 560,
+    body: (context, _) => Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        DropdownButtonFormField<ThemeMode>(
+          initialValue: widget.theme,
+          isExpanded: true,
+          decoration: InputDecoration(labelText: s.theme),
+          items: [
+            DropdownMenuItem(
+              value: ThemeMode.system,
+              child: Text(s.systemTheme),
+            ),
+            DropdownMenuItem(value: ThemeMode.light, child: Text(s.lightTheme)),
+            DropdownMenuItem(value: ThemeMode.dark, child: Text(s.darkTheme)),
+          ],
+          onChanged: (value) {
+            if (value != null) widget.onThemeChanged(value);
+          },
+        ),
+        const SizedBox(height: 20),
+        DropdownButtonFormField<String>(
+          initialValue: widget.locale?.toString() ?? 'system',
+          isExpanded: true,
+          decoration: InputDecoration(labelText: s.language),
+          items: [
+            DropdownMenuItem(value: 'system', child: Text(s.systemLanguage)),
+            const DropdownMenuItem(value: 'en', child: Text('English')),
+            const DropdownMenuItem(value: 'ru', child: Text('Русский')),
+            const DropdownMenuItem(value: 'es', child: Text('Español')),
+            const DropdownMenuItem(value: 'de', child: Text('Deutsch')),
+            const DropdownMenuItem(value: 'fr', child: Text('Français')),
+            const DropdownMenuItem(value: 'ja', child: Text('日本語')),
+            const DropdownMenuItem(
+              value: 'pt_BR',
+              child: Text('Português brasileiro'),
+            ),
+          ],
+          onChanged: (value) {
+            widget.onLocaleChanged(switch (value) {
+              'system' => null,
+              'pt_BR' => const Locale('pt', 'BR'),
+              _ => Locale(value!),
+            });
+          },
+        ),
+        const SizedBox(height: 24),
+        Text(s.privacyTitle, style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 8),
+        Text(s.privacyDescription),
+        const SizedBox(height: 20),
+        Text(s.keyboardHelp),
+      ],
+    ),
+    actions: (context) => [
+      TextButton(onPressed: () => Navigator.pop(context), child: Text(s.close)),
+    ],
+  );
+
+  /// One dialog for everything that is longer than a sentence. The platform
+  /// alert (`AlertDialog.adaptive`) is a fixed narrow box on Apple platforms
+  /// and ignores the width of its content; this one is as wide as [maxWidth]
+  /// and the window allow, and its body scrolls while the title and actions
+  /// stay in view on a small screen.
+  Future<T?> _showPanelDialog<T>({
+    required String title,
+    required Widget Function(BuildContext context, StateSetter setDialogState)
+    body,
+    required List<Widget> Function(BuildContext context) actions,
+    double maxWidth = 560,
+  }) => showDialog<T>(
+    context: context,
+    barrierDismissible: true,
+    builder: (context) => StatefulBuilder(
+      builder: (context, setDialogState) {
+        final screen = MediaQuery.sizeOf(context);
+        return Semantics(
+          scopesRoute: true,
+          namesRoute: true,
+          label: title,
+          explicitChildNodes: true,
+          child: Dialog(
+            insetPadding: const EdgeInsets.symmetric(
+              horizontal: 16,
+              vertical: 24,
+            ),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxWidth: maxWidth,
+                maxHeight: screen.height - 48,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
+                    child: Semantics(
+                      header: true,
+                      child: Text(
+                        title,
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
                     ),
-                    DropdownMenuItem(
-                      value: ThemeMode.light,
-                      child: Text(s.lightTheme),
+                  ),
+                  Flexible(
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.fromLTRB(24, 0, 24, 12),
+                      child: Material(
+                        type: MaterialType.transparency,
+                        child: body(context, setDialogState),
+                      ),
                     ),
-                    DropdownMenuItem(
-                      value: ThemeMode.dark,
-                      child: Text(s.darkTheme),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                    child: Wrap(
+                      alignment: WrapAlignment.end,
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: actions(context),
                     ),
-                  ],
-                  onChanged: (value) {
-                    if (value != null) widget.onThemeChanged(value);
-                  },
-                ),
-                const SizedBox(height: 20),
-                DropdownButtonFormField<String>(
-                  initialValue: widget.locale?.toString() ?? 'system',
-                  isExpanded: true,
-                  decoration: InputDecoration(labelText: s.language),
-                  items: [
-                    DropdownMenuItem(
-                      value: 'system',
-                      child: Text(s.systemLanguage),
-                    ),
-                    const DropdownMenuItem(value: 'en', child: Text('English')),
-                    const DropdownMenuItem(value: 'ru', child: Text('Русский')),
-                    const DropdownMenuItem(value: 'es', child: Text('Español')),
-                    const DropdownMenuItem(value: 'de', child: Text('Deutsch')),
-                    const DropdownMenuItem(
-                      value: 'fr',
-                      child: Text('Français'),
-                    ),
-                    const DropdownMenuItem(value: 'ja', child: Text('日本語')),
-                    const DropdownMenuItem(
-                      value: 'pt_BR',
-                      child: Text('Português brasileiro'),
-                    ),
-                  ],
-                  onChanged: (value) {
-                    widget.onLocaleChanged(switch (value) {
-                      'system' => null,
-                      'pt_BR' => const Locale('pt', 'BR'),
-                      _ => Locale(value!),
-                    });
-                  },
-                ),
-                const SizedBox(height: 24),
-                Text(
-                  s.privacyTitle,
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const SizedBox(height: 8),
-                Text(s.privacyDescription),
-                const SizedBox(height: 20),
-                Text(s.keyboardHelp),
-              ],
+                  ),
+                ],
+              ),
             ),
           ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text(s.close),
-          ),
-        ],
-      ),
-    );
-  }
+        );
+      },
+    ),
+  );
 }
 
 class _BrandMark extends StatelessWidget {

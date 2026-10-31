@@ -24,11 +24,11 @@ class _Platform extends PlatformBridge {
   };
 }
 
-Future<List<NetworkInterface>> _loopback() async =>
-    (await NetworkInterface.list(
-      includeLoopback: true,
-      includeLinkLocal: true,
-    )).where((i) => i.addresses.any((a) => a.isLoopback)).toList();
+Future<List<LocalInterface>> _loopback() async =>
+    (await NetworkInterface.list(includeLoopback: true, includeLinkLocal: true))
+        .where((i) => i.addresses.any((a) => a.isLoopback))
+        .map(LocalInterface.from)
+        .toList();
 
 /// Succeeds only when nothing listens on [port] of the loopback address.
 Future<bool> _portFree(int port) async {

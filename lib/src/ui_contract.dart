@@ -22,6 +22,17 @@ abstract class LanPairController extends ChangeNotifier {
   List<String> get exportAddresses;
   bool get peerJournalPresent;
 
+  /// Whether the peer confirmed the current endpoints of both devices:
+  /// `none` (no live session), `pending`, `confirmed` or `unconfirmed`. A
+  /// finished handshake of an earlier endpoint never counts.
+  String get peerSync => 'none';
+
+  /// Machine code explaining a `pending` or `unconfirmed` [peerSync].
+  String? get peerSyncReason => null;
+
+  /// The merged journals describe a participant's endpoint differently.
+  bool get endpointMismatch => false;
+
   Future<void> createSession();
   Future<void> joinSession(String invitation);
   Future<void> importInvitation();

@@ -3,7 +3,7 @@ import 'dart:math';
 
 const protocolVersion = 1;
 const reportVersion = 1;
-const appVersion = '0.1.1';
+const appVersion = '0.1.2';
 
 /// Version of the interpretation rules exported with a report. Version 1
 /// (LANPair 0.1.0) treated a bare TCP connect as success; version 2 requires
@@ -165,6 +165,52 @@ class DeviceEndpoint {
       ),
     );
   }
+}
+
+/// Endpoint revisions are small counters; this bounds what a peer may claim.
+const maxRevision = 1 << 30;
+
+/// Join generations are microsecond timestamps.
+const maxGeneration = 1 << 62;
+
+/// The endpoint revisions a request was made under. Each participant numbers
+/// its own endpoint from 1 and increases the number with every change, so a
+/// revision identifies one set of addresses, interface and ports. Revision 0
+/// means "no endpoint received from the peer".
+class EndpointStamp {
+  const EndpointStamp({required this.revision, required this.peerRevision});
+
+  /// The sender's own endpoint revision.
+  final int revision;
+
+  /// The revision of the receiver's endpoint the sender currently holds.
+  final int peerRevision;
+
+  /// Absent fields (a 0.1.1 sender) are `null`, never a confirmation.
+  static EndpointStamp? fromMessage(Map<String, Object?> value) {
+    final hasRevision = value.containsKey('revision');
+    final hasPeer = value.containsKey('peerRevision');
+    if (!hasRevision && !hasPeer) return null;
+    return EndpointStamp(
+      revision: boundedInt(
+        value['revision'],
+        'endpoint revision',
+        min: 1,
+        max: maxRevision,
+      ),
+      peerRevision: boundedInt(
+        value['peerRevision'],
+        'peer endpoint revision',
+        min: 0,
+        max: maxRevision,
+      ),
+    );
+  }
+
+  Map<String, Object?> toJson() => {
+    'revision': revision,
+    'peerRevision': peerRevision,
+  };
 }
 
 class TlsIdentity {

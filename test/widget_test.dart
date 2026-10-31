@@ -1,12 +1,14 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:lanpair/l10n/generated/app_localizations.dart';
 import 'package:lanpair/src/app.dart';
+import 'package:lanpair/src/preferences.dart';
 import 'package:lanpair/src/ui_contract.dart';
 
 class FakeController extends LanPairController {
@@ -24,7 +26,13 @@ class FakeController extends LanPairController {
   String? humanText;
   ReportExportView? exportView;
   List<ResultView> checkResults = [];
+  String sync = 'none';
+  String? syncReason;
 
+  @override
+  String get peerSync => sync;
+  @override
+  String? get peerSyncReason => syncReason;
   @override
   bool get busy => false;
   @override
@@ -268,6 +276,14 @@ class _ArchivedController extends FakeController {
   String get localRole => 'B';
 }
 
+/// The settings button of the wide layout or of the Apple navigation bar.
+final _settingsButton = find.byWidgetPredicate(
+  (widget) =>
+      widget is Icon &&
+      (widget.icon == Icons.tune_rounded ||
+          widget.icon == CupertinoIcons.slider_horizontal_3),
+);
+
 void main() {
   test('every supported ARB contains every English key with a translation', () {
     final template = jsonDecode(
@@ -501,6 +517,159 @@ void main() {
       await close();
       await tester.pumpAndSettle();
       expect(find.byType(QrImageView), findsNothing);
+    }
+  });
+
+  group('dialogs on laptop screens', () {
+    // The platform alert is a narrow fixed box on Apple platforms; the shared
+    // dialog must use the window it has and keep its actions on screen.
+    for (final (size, minWidth) in [
+      (const Size(1440, 900), 500.0),
+      (const Size(1280, 720), 500.0),
+      (const Size(1000, 420), 500.0),
+      (const Size(360, 640), 300.0),
+    ]) {
+      testWidgets('settings, details and export fit $size', (tester) async {
+        tester.view.physicalSize = size;
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        final controller = FakeController()..complete();
+        await tester.pumpWidget(LanPairApp(controller: controller));
+        await tester.pumpAndSettle();
+
+        void expectFits(Finder action) {
+          final dialog = find.byType(Dialog);
+          expect(dialog, findsOneWidget);
+          final rect = tester.getRect(dialog);
+          expect(rect.width, greaterThanOrEqualTo(minWidth));
+          expect(rect.height, lessThanOrEqualTo(size.height));
+          expect(rect.left, greaterThanOrEqualTo(0));
+          expect(rect.right, lessThanOrEqualTo(size.width));
+          // The actions stay visible whatever the height of the content.
+          expect(tester.getRect(action).bottom, lessThanOrEqualTo(size.height));
+          expect(tester.takeException(), isNull);
+        }
+
+        await tester.tap(_settingsButton.first);
+        await tester.pumpAndSettle();
+        expectFits(find.text('Close'));
+        await tester.tap(find.text('Close'));
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.text('Results').hitTestable().first);
+        await tester.pumpAndSettle();
+        await tester.ensureVisible(find.text('Export report'));
+        await tester.tap(find.text('Export report'));
+        await tester.pumpAndSettle();
+        expectFits(find.text('Export report').last);
+        await tester.tap(find.text('Cancel'));
+        await tester.pumpAndSettle();
+        expect(find.byType(Dialog), findsNothing);
+
+        await tester.ensureVisible(find.textContaining('TCP').first);
+        await tester.tap(find.textContaining('TCP').first);
+        await tester.pumpAndSettle();
+        expectFits(find.text('Close'));
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        await tester.pumpAndSettle();
+        expect(find.byType(Dialog), findsNothing);
+      }, variant: TargetPlatformVariant({TargetPlatform.macOS}));
+    }
+  });
+
+  group('persisted settings', () {
+    late Directory directory;
+    setUp(
+      () => directory = Directory.systemTemp.createTempSync('lanpair-pref'),
+    );
+    tearDown(() => directory.deleteSync(recursive: true));
+
+    test('theme and language survive a restart', () {
+      final file = File('${directory.path}/preferences.json');
+      AppPreferences.load(file)
+        ..theme = ThemeMode.dark
+        ..localeTag = 'pt_BR'
+        ..save();
+      final restored = AppPreferences.load(file);
+      expect(restored.theme, ThemeMode.dark);
+      expect(restored.localeTag, 'pt_BR');
+      expect(localeFromTag(restored.localeTag), const Locale('pt', 'BR'));
+    });
+
+    test('a missing, damaged or foreign file means the defaults', () {
+      final file = File('${directory.path}/preferences.json');
+      expect(AppPreferences.load(file).theme, ThemeMode.system);
+      file.writeAsStringSync('{broken');
+      expect(AppPreferences.load(file).localeTag, isNull);
+      file.writeAsStringSync('{"theme":"neon","locale":"xx"}');
+      final restored = AppPreferences.load(file);
+      expect(restored.theme, ThemeMode.system);
+      expect(restored.localeTag, isNull);
+    });
+
+    testWidgets('choices made in the dialog are written and reapplied', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(1200, 1000);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final file = File('${directory.path}/preferences.json');
+      await tester.pumpWidget(
+        LanPairApp(
+          controller: FakeController(),
+          preferences: AppPreferences.load(file),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(_settingsButton.first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byType(DropdownButtonFormField<ThemeMode>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Dark').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byType(DropdownButtonFormField<String>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Русский').last);
+      await tester.pumpAndSettle();
+      final saved = AppPreferences.load(file);
+      expect(saved.theme, ThemeMode.dark);
+      expect(saved.localeTag, 'ru');
+
+      // A new launch starts with the saved choices.
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpWidget(
+        LanPairApp(controller: FakeController(), preferences: saved),
+      );
+      await tester.pumpAndSettle();
+      final app = tester.widget<MaterialApp>(find.byType(MaterialApp));
+      expect(app.themeMode, ThemeMode.dark);
+      expect(app.locale, const Locale('ru'));
+    });
+  });
+
+  testWidgets('the run panel warns when the peer has not confirmed', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 1400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final controller = FakeController()..session = true;
+    for (final (state, reason, warns) in [
+      ('confirmed', 'confirmed', false),
+      ('unconfirmed', 'control_unreachable', true),
+      ('pending', 'syncing', true),
+    ]) {
+      controller
+        ..sync = state
+        ..syncReason = reason;
+      await tester.pumpWidget(LanPairApp(controller: controller));
+      await tester.pumpAndSettle();
+      final warning = find.textContaining('start independently');
+      expect(warning, warns ? findsOneWidget : findsNothing, reason: state);
+      expect(tester.takeException(), isNull);
     }
   });
 

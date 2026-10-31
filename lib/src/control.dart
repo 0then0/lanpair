@@ -14,6 +14,111 @@ class StartDeclined implements Exception {
   const StartDeclined();
 }
 
+/// The peer answered a control request with an HTTP error, as opposed to a
+/// transport failure. A 404 on `/endpoint` identifies a 0.1.1 peer.
+class ControlRejected extends HttpException {
+  const ControlRejected(this.statusCode) : super('control_rejected');
+  final int statusCode;
+}
+
+/// `/endpoint` request: the sender's current endpoint under its revision.
+class EndpointUpdate {
+  const EndpointUpdate({
+    required this.endpoint,
+    required this.stamp,
+    required this.generation,
+  });
+  final DeviceEndpoint endpoint;
+  final EndpointStamp stamp;
+
+  /// Identifies the sender's join (its numbering restarts with a new one);
+  /// a larger value is a later join, so a late message of an earlier join
+  /// can be told from a restart.
+  final int generation;
+}
+
+/// `/endpoint` answer. [applied] says whether the receiver now holds the
+/// sender's endpoint at [appliedRevision]; when it does not, [reason] is a
+/// machine code. [endpoint] and [revision] are the receiver's own.
+class EndpointReply {
+  const EndpointReply({
+    required this.endpoint,
+    required this.revision,
+    required this.applied,
+    required this.appliedRevision,
+    required this.generation,
+    this.reason,
+  });
+  final DeviceEndpoint endpoint;
+  final int revision;
+  final int generation;
+  final bool applied;
+  final int appliedRevision;
+  final String? reason;
+
+  Map<String, Object?> toJson() => {
+    'endpoint': endpoint.toJson(),
+    'revision': revision,
+    'generation': generation,
+    'applied': applied,
+    'appliedRevision': appliedRevision,
+    if (reason != null) 'reason': reason,
+  };
+
+  factory EndpointReply.fromJson(Object? value) {
+    final map = jsonObject(value, 'endpoint reply');
+    onlyKeys(map, const {
+      'endpoint',
+      'revision',
+      'generation',
+      'applied',
+      'appliedRevision',
+      'reason',
+    });
+    if (map['applied'] is! bool) {
+      throw const FormatException('Invalid endpoint reply.');
+    }
+    return EndpointReply(
+      endpoint: DeviceEndpoint.fromJson(map['endpoint']),
+      revision: boundedInt(
+        map['revision'],
+        'endpoint revision',
+        min: 1,
+        max: maxRevision,
+      ),
+      generation: boundedInt(
+        map['generation'],
+        'generation',
+        min: 1,
+        max: maxGeneration,
+      ),
+      applied: map['applied'] as bool,
+      appliedRevision: boundedInt(
+        map['appliedRevision'],
+        'applied revision',
+        min: 0,
+        max: maxRevision,
+      ),
+      reason: map['reason'] == null ? null : machineCode(map['reason']),
+    );
+  }
+}
+
+/// How a receiver judges a `/start` request against the endpoints it holds.
+enum StartVerdict {
+  /// Both sides hold each other's current endpoint, so the run may start and
+  /// the sender may treat this device as ready.
+  verified,
+
+  /// The run may start, but nothing proves both sides hold current endpoints
+  /// (a 0.1.1 sender, or no confirmed exchange yet).
+  unverified,
+
+  /// The sender's endpoint view does not match this device's. Starting would
+  /// spend the session's single run on mixed parameters.
+  declined,
+}
+
 /// Authenticated, certificate-pinned HTTPS; discovery is never required.
 /// Credentials exist only in invitations and Authorization headers.
 class ControlLink {
@@ -22,15 +127,23 @@ class ControlLink {
     required this.onHello,
     required this.onStart,
     required this.onReport,
+    this.onEndpoint,
+    this.startVerdict,
   });
   Session session;
   final Future<void> Function(DeviceEndpoint endpoint) onHello;
   final Future<void> Function() onStart;
   final Future<void> Function(String report) onReport;
+
+  /// `/endpoint` handler. Without it the path is unknown (404), as on 0.1.1.
+  final Future<EndpointReply> Function(EndpointUpdate update)? onEndpoint;
+
+  /// Judges the revisions carried by `/start`; `null` means a plain accept.
+  final StartVerdict Function(EndpointStamp? stamp)? startVerdict;
   HttpServer? _server;
   Future<void>? _opening;
   bool _closed = false;
-  int _requests = 0;
+  int _requests = 0, _exchanges = 0;
   int _inflight = 0;
 
   /// A link has one lifecycle: created, opened at most once, closed for good.
@@ -76,13 +189,16 @@ class ControlLink {
   Future<void> _handle(HttpRequest request) async {
     _inflight++;
     try {
+      // Endpoint exchanges repeat with every interface change and return to
+      // the foreground, so they have their own, larger budget.
+      final exchange = request.uri.path == '/endpoint';
       if (_inflight > 4 ||
           request.method != 'POST' ||
           !constantTimeEqual(
             request.headers.value(HttpHeaders.authorizationHeader) ?? '',
             'Bearer ${session.secret}',
           ) ||
-          ++_requests > 64) {
+          (exchange ? ++_exchanges > 512 : ++_requests > 64)) {
         request.response.statusCode = HttpStatus.forbidden;
         return;
       }
@@ -106,12 +222,45 @@ class ControlLink {
           }
           await onHello(endpoint);
           request.response.write(jsonEncode(session.local.toJson()));
+        case '/endpoint':
+          final handler = onEndpoint;
+          if (handler == null) {
+            request.response.statusCode = HttpStatus.notFound;
+            break;
+          }
+          final stamp = EndpointStamp.fromMessage(value);
+          final endpoint = DeviceEndpoint.fromJson(value['endpoint']);
+          if (stamp == null || endpoint.id != session.peer.id) {
+            throw const FormatException('Invalid endpoint update.');
+          }
+          final reply = await handler(
+            EndpointUpdate(
+              endpoint: endpoint,
+              stamp: stamp,
+              generation: boundedInt(
+                value['generation'],
+                'generation',
+                min: 1,
+                max: maxGeneration,
+              ),
+            ),
+          );
+          request.response.write(jsonEncode(reply.toJson()));
         case '/start':
           // Joining explicitly accepts this one bounded run. Duplicate starts
           // are rejected by the controller and never allocate a second run.
+          final verdict =
+              startVerdict?.call(EndpointStamp.fromMessage(value)) ??
+              StartVerdict.unverified;
+          if (verdict == StartVerdict.declined) {
+            request.response.statusCode = HttpStatus.conflict;
+            break;
+          }
           try {
             await onStart().timeout(const Duration(seconds: 2));
-            request.response.write('{}');
+            request.response.write(
+              verdict == StartVerdict.verified ? '{"verified":true}' : '{}',
+            );
           } on StartDeclined {
             request.response.statusCode = HttpStatus.conflict;
           }
@@ -180,7 +329,7 @@ class ControlLink {
         const Duration(seconds: 2),
       );
       if (response.statusCode != HttpStatus.ok) {
-        throw const HttpException('control_rejected');
+        throw ControlRejected(response.statusCode);
       }
       return await readBounded(
         response,
